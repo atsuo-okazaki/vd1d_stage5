@@ -11,6 +11,13 @@ module evolve_try_mod
                           Tmid, H, rho, kappaR, tauR, Qvis, Qirr, dYdXi, Qrad, &
                           use_be_decretion, use_irradiation, is_shadow
   use units_disk_mod, only : r_dim, sigma_dim, omegaK_dim
+
+  ! Persistent warm-start buffers for irradiation fixed-point iterations
+  real(dp), allocatable, save :: Qirr_ws(:), dYdXi_ws(:)
+  logical,  allocatable, save :: shadow_ws(:)
+  logical,  save :: ws_valid = .false.
+  integer(i4b), save :: ws_nr = -1
+
   public :: evolve_try
 
 contains
@@ -166,14 +173,14 @@ end function evolve_try_to_target
     integer(i4b) :: i_maxresT, i_maxresnu
     real(dp) :: resT_max, resnu_max, resT, resnu
 
-    integer(i4b), parameter :: iter_max = 100
+    integer(i4b), parameter :: iter_max = 30
     integer(i4b), save :: iu_res = -1, iu_conv = -1
     logical, save :: firstA = .true., firstB = .true.
     character(len=70) :: file91A, file91B
 
     real(dp) :: xi(nr), Ytmp(nr), dYdXi_tmp(nr)
 
-    integer(i4b), parameter :: mmax_irr = 8
+    integer(i4b), parameter :: mmax_irr = 6
     real(dp),     parameter :: eps_rQ   = 1.0e-2_dp
     real(dp), parameter :: Qfloor = 1.0e-40_dp   ! or 1e-60; choose safely above underflow
     real(dp),     parameter :: w_init_irr = 0.3_dp
@@ -268,13 +275,21 @@ end function evolve_try_to_target
           ! Initialize irradiation inputs for this TRY step
           if (.not. use_irradiation) then
              call set_zero_irradiation()
+             ws_valid = .false.
              Qirr_prof(:)  = 0.0_dp
              dYdXi_out(:)  = 0.0_dp
              shadow_try(:) = .false.
           else
-             Qirr_prof(:)  = Qirr_prof_in(:)
-             dYdXi_out(:)  = dYdXi_in(:)
-             shadow_try(:) = shadow_in(:)
+             ! Warm start from the last accepted irradiation state (if available)
+             if (ws_valid .and. allocated(Qirr_ws) .and. ws_nr == nr) then
+                Qirr_prof(:)  = Qirr_ws(:)
+                dYdXi_out(:)  = dYdXi_ws(:)
+                shadow_try(:) = shadow_ws(:)
+             else
+                Qirr_prof(:)  = Qirr_prof_in(:)
+                dYdXi_out(:)  = dYdXi_in(:)
+                shadow_try(:) = shadow_in(:)
+             end if
           end if
 
           ! Fixed-point loop: (T,H) -> Qirr(H) + shadow(H) -> update Qirr -> repeat
@@ -375,8 +390,18 @@ end function evolve_try_to_target
                 ! 6) Accept this iteration (even if not improved enough), update state for next m_irr
                 shadow_try(:) = shadow_new(:)
                 dYdXi_out(:)  = dYdXi_calc(:)
-
                 Qirr_prof(:)  = (1.0_dp - wloc_irr)*Qirr_prof(:) + wloc_irr*Qirr_calc(:)
+
+                ! Update warm-start buffers with the accepted state
+                if (.not. allocated(Qirr_ws) .or. ws_nr /= nr) then
+                   if (allocated(Qirr_ws)) deallocate(Qirr_ws, dYdXi_ws, shadow_ws)
+                   allocate(Qirr_ws(nr), dYdXi_ws(nr), shadow_ws(nr))
+                   ws_nr = nr
+                end if
+                Qirr_ws(:)   = Qirr_prof(:)
+                dYdXi_ws(:)  = dYdXi_out(:)
+                shadow_ws(:) = shadow_try(:)
+                ws_valid     = .true.
 
                 ! Update "previous" only after accepting the step
                 rQ_last = rQ

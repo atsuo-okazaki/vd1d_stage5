@@ -1,0 +1,58 @@
+diff --git a/disk_energy_mod.f90 b/disk_energy_mod.f90
+--- a/disk_energy_mod.f90
++++ b/disk_energy_mod.f90
+@@ -1,6 +1,7 @@
+ module disk_energy_mod
+   use mod_global
+   implicit none
++  private
+
++  ! ------------------------------------------------------------
++  ! Irradiation warm-start state (explicitly passed by argument)
++  type, public :: irr_warm_state_t
++     logical :: valid = .false.
++     real(dp), allocatable :: Qirr_prev(:)
++     real(dp), allocatable :: dYdXi_prev(:)
++     logical,  allocatable :: shadow_prev(:)
++  end type irr_warm_state_t
++
++  public :: irr_state_init
++  public :: irr_state_refresh_from_committed
++  public :: irr_state_commit_from_arrays
+
+ contains
+
++  subroutine irr_state_init(st, nr)
++    type(irr_warm_state_t), intent(inout) :: st
++    integer(i4b), intent(in) :: nr
++    if (allocated(st%Qirr_prev)) deallocate(st%Qirr_prev, st%dYdXi_prev, st%shadow_prev)
++    allocate(st%Qirr_prev(nr), st%dYdXi_prev(nr), st%shadow_prev(nr))
++    st%Qirr_prev   = 0.0_dp
++    st%dYdXi_prev  = 0.0_dp
++    st%shadow_prev = .true.
++    st%valid       = .false.
++  end subroutine irr_state_init
++
++  ! Pull the *committed/current-step* fields (after load_state_from_history(it))
++  subroutine irr_state_refresh_from_committed(st, shadow, Qirr_prof, dYdXi_loc)
++    type(irr_warm_state_t), intent(inout) :: st
++    logical, intent(in) :: shadow(:)
++    real(dp), intent(in) :: Qirr_prof(:), dYdXi_loc(:)
++    if (.not. allocated(st%Qirr_prev)) call irr_state_init(st, size(Qirr_prof))
++    st%shadow_prev = shadow
++    st%Qirr_prev   = Qirr_prof
++    st%dYdXi_prev  = dYdXi_loc
++    st%valid       = .true.
++  end subroutine irr_state_refresh_from_committed
++
++  ! Commit after successful step acceptance (use the accepted arrays)
++  subroutine irr_state_commit_from_arrays(st, shadow, Qirr_prof, dYdXi_loc)
++    type(irr_warm_state_t), intent(inout) :: st
++    logical, intent(in) :: shadow(:)
++    real(dp), intent(in) :: Qirr_prof(:), dYdXi_loc(:)
++    if (.not. allocated(st%Qirr_prev)) call irr_state_init(st, size(Qirr_prof))
++    st%shadow_prev = shadow
++    st%Qirr_prev   = Qirr_prof
++    st%dYdXi_prev  = dYdXi_loc
++    st%valid       = .true.
++  end subroutine irr_state_commit_from_arrays
