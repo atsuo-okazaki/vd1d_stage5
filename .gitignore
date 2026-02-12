@@ -5,6 +5,7 @@
 *.so
 
 # Executables
+vd1d_stage5
 *.out
 *.exe
 
@@ -13,7 +14,8 @@
 *.swp
 
 # Output data
-output/
+work/
+tmp/
 *.dat
 *.log
 
