@@ -13,10 +13,12 @@ module evolve_try_mod
   use units_disk_mod, only : r_dim, sigma_dim, omegaK_dim
 
   ! Persistent warm-start buffers for irradiation fixed-point iterations
-  real(dp), allocatable, save :: Qirr_ws(:), dYdXi_ws(:)
+  logical, save :: ws_valid = .false.
+  integer(i4b), save :: ws_nr = 0
+
+  real(dp), allocatable, save :: Qirr_ws(:)
+  real(dp), allocatable, save :: dYdXi_ws(:)
   logical,  allocatable, save :: shadow_ws(:)
-  logical,  save :: ws_valid = .false.
-  integer(i4b), save :: ws_nr = -1
 
   public :: evolve_try
 
@@ -183,14 +185,15 @@ end function evolve_try_to_target
     integer(i4b), parameter :: mmax_irr = 6
     real(dp),     parameter :: eps_rQ   = 1.0e-2_dp
     real(dp), parameter :: Qfloor = 1.0e-40_dp   ! or 1e-60; choose safely above underflow
-    real(dp),     parameter :: w_init_irr = 0.3_dp
-    real(dp),     parameter :: w_min_irr  = 0.02_dp
+    real(dp),     parameter :: w_init_irr = 0.7_dp
+    real(dp),     parameter :: w_min_irr  = 0.05_dp
     real(dp),     parameter :: w_shrink_irr = 0.5_dp
     real(dp),     parameter :: grow_tol_irr = 1.05_dp
-    real(dp),     parameter :: worsen_tol = 1.01_dp  ! treat as worsen if rQ > 1.01*rQ_prev
+    real(dp),     parameter :: worsen_tol = 1.01_dp  ! treat as worsen if rQ > 1.01*rQ_last
     integer(i4b), parameter :: n_retry_max = 3       ! backtrack attempts per m_irr
     integer(i4b), parameter :: blow_max_irr = 3
-    real(dp) :: rQ_prev, rQ_last, qref
+    real(dp) :: rQ_last, qref
+    real(dp) :: last_disp
     integer(i4b) :: n_retry
     logical :: has_prev
 
@@ -296,9 +299,8 @@ end function evolve_try_to_target
           wloc_irr     = w_init_irr
           relprev_rQ   = huge(1.0_dp)
           n_blow_irr   = 0
-          !rQ_prev = huge(1.0_dp)
+          rQ_last  = huge(1.0_dp)
           has_prev = .false.
-          rQ_last  = 0.0_dp
 
           do m_irr = 1, mmax_irr
 
@@ -362,15 +364,33 @@ end function evolve_try_to_target
 
                 write(*,'(A,1PE11.3,A,1PE11.3)') 'maxQprof =',maxval(abs(Qirr_prof)), &
                         '  maxQcalc =',maxval(abs(Qirr_calc))
+                ! Display-friendly "last": avoid printing HUGE() before the first accepted iteration
+                if (has_prev) then
+                   last_disp = rQ_last
+                else
+                   last_disp = 0.0_dp
+                end if
                 write(*,'(A,I3,A,1PE11.4,A,1PE11.4,A,1PE11.4)') &
-                     'm_irr =', m_irr, ': rQ =', rQ, '  w =', wloc_irr, '  last =', rQ_last
+                     'm_irr =', m_irr, ': rQ =', rQ, '  w =', wloc_irr, '  last =', last_disp
 
                 ! 4) Converged?
                 if (rQ < eps_rQ) then
+
                    shadow_try(:) = shadow_new(:)
                    dYdXi_out(:)  = dYdXi_calc(:)
-                   rQ_prev       = rQ
-                   exit  ! accept & exit retry loop
+                   Qirr_prof(:)  = Qirr_calc(:)
+
+                   call ensure_ws_alloc(nr)
+
+                   Qirr_ws(:)   = Qirr_prof(:)
+                   dYdXi_ws(:)  = dYdXi_out(:)
+                   shadow_ws(:) = shadow_try(:)
+                   ws_valid     = .true.
+
+                   rQ_last  = rQ
+                   has_prev = .true.
+                   exit
+
                 end if
 
                 ! 5) Backtrack if residual worsened
@@ -393,11 +413,7 @@ end function evolve_try_to_target
                 Qirr_prof(:)  = (1.0_dp - wloc_irr)*Qirr_prof(:) + wloc_irr*Qirr_calc(:)
 
                 ! Update warm-start buffers with the accepted state
-                if (.not. allocated(Qirr_ws) .or. ws_nr /= nr) then
-                   if (allocated(Qirr_ws)) deallocate(Qirr_ws, dYdXi_ws, shadow_ws)
-                   allocate(Qirr_ws(nr), dYdXi_ws(nr), shadow_ws(nr))
-                   ws_nr = nr
-                end if
+                call ensure_ws_alloc(nr)
                 Qirr_ws(:)   = Qirr_prof(:)
                 dYdXi_ws(:)  = dYdXi_out(:)
                 shadow_ws(:) = shadow_try(:)
@@ -417,7 +433,7 @@ end function evolve_try_to_target
              if (.not. use_irradiation .or. L_irr <= Lirr_floor) exit
 
              ! Optional: If rQ is already tiny, you can break early
-             if (rQ_prev < eps_rQ) exit
+             if (has_prev .and. rQ_last < eps_rQ) exit
 
           end do  ! m_irr
 
@@ -646,6 +662,22 @@ end function evolve_try_to_target
 
   end subroutine evolve_physics_one_substep_try
 
+  subroutine ensure_ws_alloc(nr)
+    use mod_global, only: dp, i4b
+    implicit none
+    integer(i4b), intent(in) :: nr
+
+    if (.not. allocated(Qirr_ws) .or. ws_nr /= nr) then
+       if (allocated(Qirr_ws)) deallocate(Qirr_ws, dYdXi_ws, shadow_ws)
+       allocate(Qirr_ws(nr), dYdXi_ws(nr), shadow_ws(nr))
+       ws_nr = nr
+
+       ! Optional: initialize to safe defaults; ws_valid controls usage anyway
+       Qirr_ws   = 0.0_dp
+       dYdXi_ws  = 0.0_dp
+       shadow_ws = .true.
+    end if
+  end subroutine ensure_ws_alloc
 
 logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source_np1) result(ok)
   use mod_global, only : nr, r, &

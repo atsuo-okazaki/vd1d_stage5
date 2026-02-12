@@ -121,8 +121,12 @@ contains
 
         ! walk to the end of this island (last hot index = iend)
         iend = i
-        do while (iend+1 <= nr .and. Tmid(iend+1) >= Tcrit_hot)
-          iend = iend + 1
+        do while (iend+1 <= nr)
+           if (Tmid(iend+1) >= Tcrit_hot) then
+              iend = iend + 1
+           else
+              exit
+           end if
         end do
 
         ! compute edge-interpolated outer boundary of this island
