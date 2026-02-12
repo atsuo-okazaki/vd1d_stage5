@@ -1,0 +1,80 @@
+1. 必須ではないが「やっておくと楽」なこと（強く推奨）
+(A) Stage 2 の到達点を一言で宣言する
+
+新しいチャットの最初に、例えば次の1文を書いてもらえると完璧です。
+
+Stage 2 は完了。
+1D viscous disk + time-dependent energy PDE + irradiation (LOH24 Eq.16) + time-delay (Scheme C) が安定に動作。
+
+これだけで、こちらは **「完成した Stage 2 を前提に Stage 3 の設計だけを考えるモード」**に即座に切り替えられます。
+
+(B) Stage 3 でやりたいことを箇条書きで（粗くてOK）
+
+まだ決まっていなくても、例えば：
+
+shadowing を入れたい
+
+irradiation と energy PDE を semi-implicit にしたい
+
+thermal instability branch の追跡
+
+hysteresis を数値的に再現したい
+
+outburst / quiescence の再現
+
+のように **「関心トピックを雑に列挙」**してもらえれば十分です。
+順序や優先度はこちらで整理できます。
+
+2. 技術的に「やらなくてよい」こと（安心してOK）
+
+以下は 今やらなくて全く問題ありません。
+
+コードの大掃除や最適化
+
+irradiation buffer の checkpoint 対応
+
+branch jump の完全理解
+
+shadowing の正しい物理モデル決定
+
+論文用の美しい図
+
+Stage 3 は **「設計・実験フェーズ」**なので、多少の不格好さはむしろ正解です。
+
+3. Stage 3 に入ると自然に出てくるテーマ（予告）
+
+次のチャットでは、ほぼ確実に次の話題が出てきます：
+
+shadowing をどの変数に依存させるか
+
+H/r?
+
+d(H/r)/dr?
+
+optical depth?
+
+irradiation と energy PDE の時間的な扱い
+
+fully explicit
+
+operator-split
+
+semi-implicit
+
+branch jump の正体
+
+物理的遷移か
+
+Newton solver の basin 問題か
+
+time step 制約か
+
+「何を保存量として監視すべきか」
+
+total energy?
+
+entropy-like quantity?
+
+integrated heating/cooling?
+
+Stage 2 をここまで丁寧に作ったので、Stage 3 はかなり楽になります。

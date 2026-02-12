@@ -1,0 +1,39 @@
+# usage:
+#        gnuplot sigma.plt
+#
+set term pdfcairo transparent enhanced fontscale 1.0 size 5.00in, 4.00in 
+INFILE = "disk_evolution.dat"
+OUTFILE = "disk_evolution.pdf"
+
+set output OUTFILE
+
+### x-axis
+xmin = 1e11
+xmax = 1e15
+set xrange [xmin:xmax]
+set logscale x
+set format x "10^{%L}"
+set xlabel "r (cm)"
+
+### y-axis
+set logscale y
+ymin = 1e-9; ymax = 1e3
+set yrange [ymin:ymax]
+set format y "10^{%L}"
+set ylabel "log {/Symbol S} (g/cm^2)"
+
+### Labels
+#set label 1 left at graph 0.05, 0.9 "Opacity: {/Symbol k}_{es}+{/Symbol k}_{ff}" font ",10"
+
+### legends
+set key font ",8"
+set key right top
+
+stats INFILE using 0 nooutput
+ncol = STATS_columns
+
+plot for [c=1:ncol:5] INFILE u 1:c w l lw 1 lc "black" notitle #, \
+#     ymax*(x/xmin)**(-2) w l lw 2 lc 'black'
+#plot for [c=2:15] INFILE u 1:c w p pt 7 ps 0.1 notitle
+
+unset output

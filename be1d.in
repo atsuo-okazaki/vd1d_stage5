@@ -1,0 +1,64 @@
+&disk_grid
+  nr      = 301
+  rin_value  = 1.0
+  rout_value = 100.0
+  r_unit     = 'dimless'
+/
+
+&disk_time
+  alpha_scheme = 1.0
+  t_sim_start = 0.0
+  t_sim_end   = 1.0e5
+/
+
+&disk_init
+  fwhm   = 0.2
+  sigma_init = 1.0
+/
+
+&disk_visc
+  delta   = 0.0
+  alphaSS = 0.3
+  hr0     = 0.01
+/
+
+&disk_mode
+  use_energy_balance = .true.
+  use_be_decretion   = .true.
+  use_irradiation    = .true.
+  inner_bc_type      = 0       ! 0: no torque, 1: open boundary, 2: zero inward flux
+  outer_bc_type      = 0       ! 0: open boundary, 1: no outflow, 2: zero flux
+  p_nu_isothermal    = 1.5
+/
+
+&star_params
+  model_type    = 'star'    ! 'star' or 'bh'
+  M_star_msun   = 19.0      ! stellar mass in Msun
+  R_star_rsun   = 8.0       ! stellar radius in Rsun
+  Teff_star_in  = 26000.0   ! effective temperature [K]
+  q             = 0.0       ! binary mass ratio (used only if model-type = 'bh')
+/
+
+&scale_params
+  r0_mode       = 'star'    ! 'star', 'rg', or 'explicit'
+  R0_over_Rstar = 1.0       ! R0 = r0_over_Rstar * R_star  if r0_mode='star'
+  r0_over_Rg    = 2.0e3     ! R0 = r0_over_Rg * R_g        if r0_mode='rg'
+  R0_input      = 0.0       ! R0 in [cm] if r0_mode='explicit'
+/
+
+&inflow
+  use_inflow   = .true.
+  mdot_acc_edd = 10.0
+  rinj_min     = 1.0
+  rinj_max     = 1.02
+  t_in_start   = 0.0
+  t_in_end     = 1.0e99
+/
+
+&wind_params
+   use_wind_truncation  = .true.
+   mdot_w_msunyr   = 6.0e-10
+   vinf_w          = 2.5e8
+   beta_w          = 1.0
+   f_rho_wind      = 1.0
+/

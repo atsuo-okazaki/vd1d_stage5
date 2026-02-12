@@ -1,0 +1,268 @@
+# usage:
+#        gnuplot -e 'IT="002970001"' scripts/profiles.plt
+#
+set term pdfcairo transparent enhanced fontscale 1.0 size 5.00in, 4.00in 
+#INFILE = "profiles/disk_t".IT.".dat"
+INFILE = "disk_t".IT.".dat"
+
+# Get time from INFILE
+raw = system(sprintf("grep '^#' %s | head -1 | sed 's/.*t =  \\([0-9.E+-]*\\).*/\\1/'", INFILE))
+raw_clean = sprintf("%s", raw)
+t = real(raw_clean)
+t_exp = floor(log10(t))
+t_base = t / (10.0**t_exp)
+t_fmt = sprintf("%.3g×10^{%d}", t_base, t_exp)
+
+### Labels
+#set label 1 left at graph 0.05, 0.93 "Opacity: OP+S03" font ",10"
+set label 2 right at graph 0.96, 0.93 "Time = ".t_fmt." s" font ",9"
+
+m = 1
+stats INFILE every ::0::0 using m nooutput
+x0 = STATS_mean
+
+### x-axis
+stats INFILE using 1 nooutput
+xmin = 10.0**(int(log10(STATS_min/x0)))
+xmax = 10.0**(int(log10(STATS_max/x0) + 0.99999))
+set xrange [xmin:xmax]
+set logscale x
+set format x "10^{%L}"
+set xlabel "r [cm]"
+
+
+#################
+# Plot 1: Sigma #
+#################
+n = 2
+stats INFILE using (column(n) > 0 ? column(n) : 1/0) nooutput
+ymin_log = floor(log10(STATS_min))
+ymax_log = ceil(log10(STATS_max))
+
+# ymin_log = ymin_log - 1
+# ymax_log = ymax_log + 1
+
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+set yrange [ymin:ymax]
+set logscale y
+set format y "10^{%L}"
+set mytics 10
+set ylabel "{/Symbol S} [g/cm^2]"
+
+### legends
+set key font ",10"
+set key right top
+
+OUTFILE = "Sigma_t".IT.".pdf"
+set output OUTFILE
+
+plot INFILE using (column(m)/x0):(column(n)) \
+     with lines lw 3 lc rgb "black"notitle
+
+unset output
+set yrange [*:*]
+unset logscale y
+unset format y
+
+#################
+# Plot 2: H/r   #
+#################
+# ratio = H / r  (assuming col1=r, col3=H)
+### y-axis
+n = 3
+stats INFILE using ( (column(m) != 0 && column(n)/column(m) > 0) ? (column(n)/column(m)) : 1/0 ) nooutput
+
+ymin_log = floor(log10(STATS_min))
+ymax_log = ceil(log10(STATS_max))
+
+# ymin_log = ymin_log - 1
+# ymax_log = ymax_log + 0
+
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+
+set yrange [ymin:ymax]
+
+set logscale y
+set format y "10^{%L}"
+#unset ytics
+#set ytics add
+#do for [i = ymin_log:ymax_log] {
+#    set ytics add sprintf("10^{%d}", i) 10.0**i
+#}
+#set mytics 10
+set ylabel "H/r"
+
+### legends
+set key font ",10"
+set key right top
+
+OUTFILE = "hor_t".IT.".pdf"
+set output OUTFILE
+plot INFILE using (column(m)/x0):(column(n)/column(m)) \
+     with lines lw 3 lc rgb "black" notitle
+
+unset output
+# --- Reset ticks to default for subsequent plots
+#set ytics autofreq
+#unset mytics
+
+set yrange [*:*]
+unset logscale y
+
+
+#################
+# Plot 3: rho   #
+#################
+### y-axis
+n = 4
+stats INFILE using (column(n) > 0 ? column(n) : 1/0) nooutput
+ymin_log = floor(log10(STATS_min))
+ymax_log = ceil(log10(STATS_max))
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+set yrange [ymin:ymax]
+set logscale y
+set format y "10^{%L}"
+set ylabel "{/Symbol r} [g/cm^3]"
+
+### legends
+set key font ",10"
+set key right top
+
+OUTFILE = "rho_t".IT.".pdf"
+set output OUTFILE
+plot INFILE using (column(m)/x0):(column(n)) \
+     with lines lw 3 lc rgb "black" notitle
+
+unset output
+set yrange [*:*]
+unset logscale y
+
+#################
+# Plot 4: nu    #
+#################
+### y-axis
+n = 5
+stats INFILE using (column(n) > 0 ? column(n) : 1/0) nooutput
+ymin_log = floor(log10(STATS_min))
+ymax_log = ceil(log10(STATS_max))
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+set yrange [ymin:ymax]
+set logscale y
+set format y "10^{%L}"
+set ylabel "{/Symbol n} [cm^2/s]"
+
+### legends
+set key font ",10"
+set key right top
+
+OUTFILE = "nu_t".IT.".pdf"
+set output OUTFILE
+plot INFILE using (column(m)/x0):(column(n)) \
+     with lines lw 3 lc rgb "black" notitle
+
+unset output
+set yrange [*:*]
+unset logscale y
+
+
+#########################
+# Plot 5: Tmid vs Tsurf #
+#########################
+### y-axis
+n1 = 9
+stats INFILE using (column(n1)  > 0 ? column(n1)  : 1/0) nooutput
+tmin_log_9  = floor(log10(STATS_min))
+tmax_log_9  = ceil(log10(STATS_max))
+
+n2 = 10
+stats INFILE using (column(n2) > 0 ? column(n2) : 1/0) nooutput
+tmin_log_10 = floor(log10(STATS_min))
+tmax_log_10 = ceil(log10(STATS_max))
+
+ymin_log = (tmin_log_9  < tmin_log_10) ? tmin_log_9  : tmin_log_10
+ymax_log = (tmax_log_9  > tmax_log_10) ? tmax_log_9  : tmax_log_10
+
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+set yrange [ymin:ymax]
+set logscale y
+set format y "10^{%L}"
+set ylabel "Temperature [K]"
+
+### legends
+set key font ",10"
+set key left bottom
+
+OUTFILE = "temp_t".IT.".pdf"
+set output OUTFILE
+
+plot INFILE using (column(m)/x0):(column(n1)) \
+     with lines lw 3 lc rgb "black" title "T_{mid}", \
+     INFILE using (column(m)/x0):(column(n2)) \
+     with lines lw 3 lc rgb "blue" title "T_{surf}"
+
+unset output
+set yrange [*:*]
+unset logscale y
+
+
+##################
+# Plot 6: kappaR #
+##################
+### y-axis
+n = 11
+stats INFILE using (column(n) > 0 ? column(n) : 1/0) nooutput
+ymin_log = floor(log10(STATS_min))
+ymax_log = ceil(log10(STATS_max))
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+set yrange [ymin:ymax]
+set logscale y
+set format y "10^{%L}"
+set ylabel "{/Symbol k}_{Ross} [cm^2/g]"
+
+### legends
+set key font ",10"
+set key right top
+
+OUTFILE = "kappaR_t".IT.".pdf"
+set output OUTFILE
+
+plot INFILE using (column(m)/x0):(column(n)) \
+     with lines lw 3 lc rgb "black" notitle
+
+unset output
+set yrange [*:*]
+unset logscale y
+
+
+##################
+# Plot 7: tauR   #
+##################
+### y-axis
+n = 12
+stats INFILE using (column(n) > 0 ? column(n) : 1/0) nooutput
+ymin_log = floor(log10(STATS_min))
+ymax_log = ceil(log10(STATS_max))
+ymin = 10.0**ymin_log
+ymax = 10.0**ymax_log
+set yrange [ymin:ymax]
+set logscale y
+set format y "10^{%L}"
+set ylabel "{/Symbol t}_{Ross}"
+
+### legends
+set key font ",10"
+set key right top
+
+OUTFILE = "tauR_t".IT.".pdf"
+set output OUTFILE
+
+plot INFILE using (column(m)/x0):(column(n)) \
+     with lines lw 3 lc rgb "black" notitle
+
+unset output

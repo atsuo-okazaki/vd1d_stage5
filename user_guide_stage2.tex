@@ -1,0 +1,265 @@
+\documentclass[a4paper,11pt]{article}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{geometry}
+\geometry{margin=25mm}
+
+\title{User's Guide for Stage 2 Disk Evolution Code}
+\author{Atsuo Okazaki}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+This document describes the structure, numerical scheme, and physical
+implementation of the Stage~2 version of the one--dimensional viscous
+disk evolution code.
+Stage~2 corresponds to the first fully time--dependent implementation
+of the disk energy equation coupled with irradiation heating including
+a finite time delay.
+
+The code is designed for robustness, extensibility, and physical
+transparency, and is intended for studies of accretion and decretion
+disks in high--energy binary systems.
+
+\section{General Structure of the Code}
+
+The time integration is organized around three nested layers:
+
+\begin{enumerate}
+\item \textbf{Output--level time stepping} with a fixed interval
+      $\Delta t_{\rm out}$.
+\item \textbf{Adaptive substepping} to reach the next output time.
+\item \textbf{Local TRY/COMMIT evolution} for each substep.
+\end{enumerate}
+
+The main program advances the system by repeatedly calling
+\texttt{evolve\_try\_to\_target}, which ensures that the system evolves
+from time $t_n$ to $t_n + \Delta t_{\rm out}$ using as many internal
+substeps as required for stability.
+
+\section{Main Modules}
+
+\subsection{mod\_global}
+
+This module stores global grid definitions and state arrays.
+
+Key quantities include:
+\begin{itemize}
+\item Radial grid: \texttt{r(i)}, \texttt{nr}
+\item Surface density: \texttt{sigma\_cur(i)}
+\item Viscosity: \texttt{nu\_cur(i)}
+\item Thermal quantities:
+  \texttt{Tmid\_cur}, \texttt{H\_cur}, \texttt{rho\_cur},
+  \texttt{kappa\_cur}, \texttt{tau\_cur}
+\item Heating and cooling rates:
+  \texttt{Qvis\_cur}, \texttt{Qrad\_cur}, \texttt{Qirr\_cur}
+\end{itemize}
+
+The suffix \texttt{\_cur} indicates the current committed state inside
+a substep.
+
+\subsection{evolve\_substep\_mod}
+
+This module controls the evolution over a single adaptive substep.
+
+The central routine is:
+\begin{verbatim}
+substep_try_and_commit()
+\end{verbatim}
+
+It performs:
+\begin{enumerate}
+\item Construction of the irradiation profile at the substep start.
+\item A TRY evolution using \texttt{evolve\_physics\_one\_substep\_try}.
+\item Acceptance or rejection of the step.
+\item Commitment of the result to the \texttt{\_cur} arrays.
+\end{enumerate}
+
+No retry loop exists inside this routine; retries are handled at a
+higher level.
+
+\subsection{evolve\_try\_mod}
+
+This module contains the physics solver for a single substep.
+
+The main routine is:
+\begin{verbatim}
+evolve_physics_one_substep_try()
+\end{verbatim}
+
+It advances:
+\begin{itemize}
+\item Surface density $\Sigma$
+\item Temperature $T$
+\item Viscosity $\nu$
+\item Disk structure and heating/cooling terms
+\end{itemize}
+
+for a given substep size $\Delta t$.
+
+\subsection{evolve\_to\_target (or evolve\_try\_to\_target)}
+
+This routine advances the system from $t_n$ to
+$t_n + \Delta t_{\rm out}$ using adaptive substeps.
+
+Algorithm:
+\begin{enumerate}
+\item Initialize \texttt{t\_local = t\_nd}.
+\item While remaining time $>0$:
+  \begin{itemize}
+  \item Attempt a substep of size $\Delta t_{\rm try}$.
+  \item On failure, reduce $\Delta t$.
+  \item On success, commit and advance \texttt{t\_local}.
+  \end{itemize}
+\item Ensure that output times are uniformly spaced.
+\end{enumerate}
+
+\section{Governing Equations}
+
+\subsection{Surface Density Evolution}
+
+The disk surface density evolves according to the standard viscous
+diffusion equation:
+\begin{equation}
+\frac{\partial \Sigma}{\partial t}
+=
+\frac{3}{r} \frac{\partial}{\partial r}
+\left[
+r^{1/2} \frac{\partial}{\partial r}
+\left(
+\nu \Sigma r^{1/2}
+\right)
+\right]
++ S(r,t),
+\end{equation}
+where $S(r,t)$ is an external source or sink term.
+
+Time integration uses the $\theta$--method:
+\begin{equation}
+\Sigma^{n+1}
+=
+\Sigma^{n}
++ \Delta t \left[
+(1-\theta) F(\Sigma^n) + \theta F(\Sigma^{n+1})
+\right].
+\end{equation}
+
+\subsection{Energy Equation}
+
+At each radius, the midplane temperature evolves according to:
+\begin{equation}
+\Sigma c_V \frac{dT}{dt}
+=
+Q_{\rm vis} + Q_{\rm irr} - Q_{\rm rad}.
+\end{equation}
+
+An implicit Euler step is used:
+\begin{equation}
+\frac{T^{n+1} - T^n}{\Delta t}
+=
+\frac{Q_{\rm vis}(T^{n+1}) + Q_{\rm irr} - Q_{\rm rad}(T^{n+1})}
+{\Sigma c_V}.
+\end{equation}
+
+This nonlinear equation is solved locally using a damped Newton method
+with bracketing safeguards.
+
+\section{Convergence and Acceptance Criteria}
+
+Each substep is accepted if:
+\begin{itemize}
+\item No numerical failure occurs (NaN, divergence).
+\item $\Sigma > 0$, $T > 0$, $\nu > 0$ in active cells.
+\end{itemize}
+
+The Newton iteration itself enforces local convergence of the energy
+equation, so no global thermal balance test is required at this stage.
+
+\section{Irradiation Model}
+
+\subsection{Irradiation Heating Rate}
+
+The irradiation heating rate is computed using Eq.~(16) of
+Lee, Okazaki, and Hayasaki (2024):
+\begin{equation}
+Q_{\rm irr}(\xi)
+=
+\frac{A_1 L_1}{2\pi r_{\rm in}^2}
+\frac{1}{\xi}
+\left[
+(1+Q_{12}) \frac{dY}{d\xi}
+-
+\frac{\beta_1 + Q_{12}\beta_2}{\xi^2}
+\left(
+\frac{Y}{\xi} - \frac{1}{2}\frac{dY}{d\xi}
+\right)
+\right],
+\end{equation}
+where $\xi = r/r_{\rm in}$ and $Y = H/r$.
+
+At Stage~2:
+\begin{itemize}
+\item Shadowing is disabled.
+\item $Q_{\rm irr}(r)$ is computed once per substep using the
+      geometry at the substep start.
+\end{itemize}
+
+\subsection{Time Delay (Scheme C)}
+
+Irradiation is powered by accretion luminosity with a finite delay.
+
+Procedure:
+\begin{enumerate}
+\item Measure instantaneous accretion rate $\dot M_{\rm in}(t)$ at the
+      inner boundary.
+\item Store $\dot M_{\rm in}$ in a physical--time history buffer.
+\item Define a delay time:
+\begin{equation}
+t_{\rm delay}
+=
+f_{\rm delay} \frac{r_{\rm in}^2}{\nu(r_{\rm in})}.
+\end{equation}
+\item Compute delayed accretion rate
+$\dot M_{\rm in}(t - t_{\rm delay})$ by linear interpolation.
+\item Set irradiation luminosity:
+\begin{equation}
+L_{\rm irr}
+=
+\eta_{\rm acc} \dot M_{\rm in}(t - t_{\rm delay}) c^2,
+\end{equation}
+optionally capped at the Eddington luminosity.
+\end{enumerate}
+
+This scheme ensures causality and avoids instantaneous feedback.
+
+\section{Scope and Limitations of Stage 2}
+
+Stage~2 includes:
+\begin{itemize}
+\item Fully time--dependent energy equation.
+\item Adaptive substepping with fixed output times.
+\item Irradiation with time delay.
+\end{itemize}
+
+Not included at this stage:
+\begin{itemize}
+\item Shadowing effects.
+\item Implicit irradiation--thermal coupling.
+\item Stability branch tracking.
+\item Checkpointing of irradiation history buffers.
+\end{itemize}
+
+These are intended for later development stages.
+
+\section{Summary}
+
+The Stage~2 code provides a robust and physically consistent framework
+for studying irradiated viscous disks with delayed feedback.
+It forms a solid foundation for future extensions including shadowing,
+branch stability analysis, and global energy diagnostics.
+
+\end{document}
