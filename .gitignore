@@ -1,3 +1,21 @@
-*.mod
+# Fortran build artifacts
 *.o
-vd1d_stage5
+*.mod
+*.a
+*.so
+
+# Executables
+*.out
+*.exe
+
+# Temporary files
+*~
+*.swp
+
+# Output data
+output/
+*.dat
+*.log
+
+# macOS
+.DS_Store
