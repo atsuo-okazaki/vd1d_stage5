@@ -209,6 +209,7 @@ end function evolve_try_to_target
     real(dp) :: Qirr_calc(nr), Qirr_raw(nr), Y_prof(nr), dYdXi_calc(nr)
     logical  :: shadow_new(nr)
     real(dp) :: hoverr_raw(nr), hoverr_sm(nr), Hshadow_cgs(nr)
+    real(dp) :: maxQcalc, maxQprof
     real(dp) :: wloc_irr, rQ, numr, denr, relprev_rQ
     integer(i4b) :: m_irr, n_blow_irr
 
@@ -308,9 +309,11 @@ end function evolve_try_to_target
 
              do  ! retry loop (same m_irr)
 
-               ! 1) Solve energy PDE with CURRENT (shadow_try, Qirr_prof)
-                call energy_pde_step_try( nr, r_cgs, Sigma_cgs, OmegaK_cgs, shadow_try, Qirr_prof, &
-                     dt_phys, T_prev, &
+                !------------------------------------------------------
+                ! 1) Solve energy PDE with CURRENT (shadow_try, Qirr_prof)
+                !------------------------------------------------------
+                call energy_pde_step_try( nr, r_cgs, Sigma_cgs, OmegaK_cgs, shadow_try, &
+                     Qirr_prof, dt_phys, T_prev, &
                      T_out, H_out, rho_out, kappa_out, tau_out, &
                      Qvis_out, Qrad_out, Qirr_out, &
                      nu_out, converged )
@@ -323,16 +326,83 @@ end function evolve_try_to_target
 
                 if (.not. use_irradiation .or. L_irr <= Lirr_floor) exit  ! nothing to iterate
 
+                !------------------------------------------------------
                 ! 2) Recompute shadow_new(H_out) and Qirr_calc(H_out)
                 !    (use your existing blocks for:
                 !     hoverr_raw/smooth -> compute_shadow_loggrid_hyst -> build_Qirr_profile_eq16_with_raw
                 !     fix_Qirr_negative_spikes -> hard mask Qirr_calc=0 in shadow)
-                !
-                ! --- (your existing code here) ---
-                !
-                ! After this, you have shadow_new(:), Qirr_calc(:), dYdXi_calc(:)
+                !------------------------------------------------------
+                ! Recompute shadow(H_out) using the SAME hysteresis logic
+                do i = 1, nr
+                   hoverr_raw(i) = H_out(i) / max(r_cgs(i), 1.0e-99_dp)
+                end do
+                call smooth_profile_logr(n=nr, r_cgs=r_cgs, y_in=hoverr_raw, halfwin=5, y_out=hoverr_sm)
+                do i = 1, nr
+                   Hshadow_cgs(i) = hoverr_sm(i) * r_cgs(i)
+                end do
+                call compute_shadow_loggrid_hyst(nr, r_cgs, Hshadow_cgs, halfwin=5, &
+                     eps_on=eps_on, eps_off=eps_off, shadow=shadow_new)
 
-                ! 3) True residual rQ
+                ! Recompute Qirr(H_out) using LOH24 Eq.(16) wrapper
+                call build_Qirr_profile_eq16_with_raw(nr, r_cgs, H_out, Qirr_raw, Qirr_calc, &
+                     dYdXi_calc, Y_prof)
+
+                call fix_Qirr_negative_spikes(n=nr, r_cgs=r_cgs, shadow=shadow_new, &
+                     Qirr_raw=Qirr_raw, Qirr_prof=Qirr_calc, &
+                     max_run=3, Qirr_floor_abs=0.0_dp, use_log_r=.true.)
+
+                !if (use_soft_shadow) then
+                !   ! Soft transition around the shadow boundary (more physical, smoother Jacobian)
+                !   do i = 1, nr
+                !      ! f = (H/r)_sm / envelope is hidden inside compute_shadow_loggrid_hyst,
+                !      ! so here we approximate smoothing by using the local hoverr_sm ratio to max so far.
+                !      ! For a stricter implementation, you can re-evaluate the envelope and f(i) explicitly.
+                !      ! Simple robust option: keep hard shadow as default (use_soft_shadow=.false.).
+                !      if (shadow_new(i)) then
+                !         Qirr_calc(i) = 0.0_dp ! This is still a hard mask. Change it later!
+                !      end if
+                !   end do
+                !else
+                   ! Hard mask (your current model)
+                   where (shadow_new)
+                      Qirr_calc = 0.0_dp
+                   end where
+                !end if
+
+                ! ------------------------------------------------------
+                ! Guard: irradiation effectively zero -> skip residual loop & accept
+                ! (must be placed right after Qirr_calc is finalized, before rQ calc)
+                ! ------------------------------------------------------
+                maxQcalc = maxval(abs(Qirr_calc))
+                maxQprof = maxval(abs(Qirr_prof))
+                write (*, '("m_irr =", i2, ", Number of shadowed grids =", i4, &
+                      ", max(|Qirr_calc|)/max(|Qirr_prof|) =", 1pe12.4)') m_irr, &
+                      count(shadow_new), maxQcalc/maxQprof
+
+                if (maxQcalc < Qfloor .and. maxQprof < Qfloor) then
+                   rQ = 0.0_dp
+
+                   ! accept the "zero irradiation" consistent state
+                   shadow_try(:) = shadow_new(:)
+                   dYdXi_out(:)  = 0.0_dp
+                   Qirr_prof(:)  = 0.0_dp
+
+                   ! warm-start bufferもゼロで更新（次 timestep も安定）
+                   call ensure_ws_alloc(nr)
+                   Qirr_ws(:)   = 0.0_dp
+                   dYdXi_ws(:)  = 0.0_dp
+                   shadow_ws(:) = shadow_try(:)
+                   ws_valid     = .true.
+
+                   rQ_last  = 0.0_dp
+                   has_prev = .true.
+
+                   exit   ! exit retry loop (go to next m_irr / or later break)
+                end if
+
+                !------------------------------------------------------
+                ! 3) True fixed-point residual rQ: ||Qirr_calc - Qirr_prof|| / ||Qirr_prof||
+                !------------------------------------------------------
                 numr = 0.0_dp
                 denr = 0.0_dp
 !$omp parallel do default(shared) private(i,qref) reduction(+:numr,denr)
