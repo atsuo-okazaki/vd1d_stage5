@@ -17,10 +17,12 @@
 module checkpoint_mod
   use kind_params, only : dp, i4b
   use mod_global,  only : nr, r, sigmat, nu_conv, t_nd, dt, alpha, &
-                          Tmid, H, rho, kappaR, tauR, Qirr, dYdXi
+                          Tmid, H, rho, kappaR, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
+                          use_irradiation_delay
+  use irradiation_mod, only : save_irradiation_buffer, load_irradiation_buffer
   implicit none
 
-  integer(i4b), parameter :: CKPT_VER = 2
+  integer(i4b), parameter :: CKPT_VER = 4
   integer(i4b), parameter :: CKPT_MAGIC = int(z'434B5054', i4b)  ! 'CKPT'
 
 contains
@@ -79,6 +81,17 @@ contains
     write(iu_cp) dYdXi(it_chk-1, :)
     write(iu_cp) dYdXi(it_chk,   :)
 
+    ! V3: Qvis, Qrad, is_shadow (needed for proper restart with irradiation)
+    write(iu_cp) Qvis(it_chk-1, :)
+    write(iu_cp) Qvis(it_chk,   :)
+    write(iu_cp) Qrad(it_chk-1, :)
+    write(iu_cp) Qrad(it_chk,   :)
+    write(iu_cp) is_shadow(it_chk-1, :)
+    write(iu_cp) is_shadow(it_chk,   :)
+
+    ! V4: irradiation delay buffer (use_irradiation_delay only)
+    call save_irradiation_buffer(iu_cp)
+
     close(iu_cp)
 
     ! --- Atomic-ish replace: remove old then rename temp to final
@@ -119,8 +132,8 @@ contains
     end if
 
     read(iu_re) ver
-    if (ver /= CKPT_VER) then
-       write(*,*) 'ERROR: unsupported checkpoint version =', ver
+    if (ver < 2 .or. ver > CKPT_VER) then
+       write(*,*) 'ERROR: unsupported checkpoint version =', ver, ' (supported: 2-', CKPT_VER, ')'
        stop
     end if
 
@@ -191,7 +204,30 @@ contains
     read(iu_re) tmp(:); Qirr(it_restart,   :) = tmp(:)
     read(iu_re) tmp(:); dYdXi(it_restart-1, :) = tmp(:)
     read(iu_re) tmp(:); dYdXi(it_restart,   :) = tmp(:)
+
+    ! V3: Qvis, Qrad, is_shadow (optional for ver 2)
+    if (ver >= 3) then
+       read(iu_re) tmp(:); Qvis(it_restart-1, :) = tmp(:)
+       read(iu_re) tmp(:); Qvis(it_restart,   :) = tmp(:)
+       read(iu_re) tmp(:); Qrad(it_restart-1, :) = tmp(:)
+       read(iu_re) tmp(:); Qrad(it_restart,   :) = tmp(:)
+       block
+         logical, allocatable :: shad_tmp(:)
+         allocate(shad_tmp(nr))
+         read(iu_re) shad_tmp(:); is_shadow(it_restart-1, :) = shad_tmp(:)
+         read(iu_re) shad_tmp(:); is_shadow(it_restart,   :) = shad_tmp(:)
+         deallocate(shad_tmp)
+       end block
+    else
+       ! Ver 2: Qvis, Qrad, is_shadow not in file; leave as-is or zero
+       Qvis(it_restart-1:it_restart, :) = 0.0_dp
+       Qrad(it_restart-1:it_restart, :) = 0.0_dp
+       is_shadow(it_restart-1:it_restart, :) = .false.
+    end if
     deallocate(tmp)
+
+    ! V4: irradiation delay buffer
+    if (ver >= 4) call load_irradiation_buffer(iu_re)
 
     close(iu_re)
 

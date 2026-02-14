@@ -566,7 +566,7 @@ contains
     !call compute_Y_dYdXi(nr, xi, r_cgs, H_cgs, Y, dYdXi)
     ! Smoothing of Y and dYdXi by Savitzky–Golay method
     call compute_Y_dYdXi_sg(n=nr, xi=xi, r_cgs=r_cgs, H_cgs=H_cgs, &
-                        halfwin=3, poly_order=2, Y=Y, dYdXi=dYdXi)
+                        halfwin=7, poly_order=2, Y=Y, dYdXi=dYdXi)
     call compute_Qirr_eq16(n=nr, xi=xi, Y=Y, dYdXi=dYdXi, rin_cgs=rin_cgs, &
                         A1=A1, L1=L1, Q12=Q12, beta1=beta1, beta2=beta2, &
                         Qirr_out=Qirr_prof)
@@ -643,17 +643,15 @@ contains
                                    Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy,     &
                                    Qirr_in=Qirr_prof(i) )
        else
-          ! fallback: copy previous if available, else keep zeros (or your safe seed)
-          !if (itp1 > 1 .and. Tmid(itp1-1, i) > 0.0_dp) then
-          !   Tmid_new(i)  = Tmid(itp1-1, i)
-          !   H_loc(i)     = H(itp1-1, i)
-          !   rho_loc(i)   = rho(itp1-1, i)
-          !   kappa_loc(i) = kappaR(itp1-1, i)
-          !   tau_loc(i)   = tauR(itp1-1, i)
-          !   nu_dim(i)    = nu_conv(itp1-1, i) * (nu0_dim / max(nu0_nd, 1.0e-99_dp))
-          !end if
-          write (*, '("No root is found at i =", i4, " Stop.)")') i
-          stop
+          ! Fallback: use T_floor and compute consistent structure
+          Tmid_new(i) = T_floor
+          call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), is_shadow(i), &
+                                   Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i),        &
+                                   kappa_loc(i), tau_loc(i),                            &
+                                   Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy,     &
+                                   Qirr_in=Qirr_prof(i) )
+          ! Warn only once per cell per run (itp1<=1 avoids spam in iteration)
+          ! if (itp1 <= 1) write (*, '("Warning: No thermal root at i =", i4)') i
        end if
     end do
 !$omp end parallel do

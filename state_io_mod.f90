@@ -33,8 +33,7 @@ contains
     Qrad_cur(:)     = Qrad(it,:)
     Qirr_cur(:)     = Qirr(it,:)
     dYdXi_cur(:)    = dYdXi(it,:)
-    !shadow_cur(:)  = is_shadow(it,:)
-    shadow_cur(:)   = .false.
+    shadow_cur(:)   = is_shadow(it,:)
 
   end subroutine load_state_from_history
 

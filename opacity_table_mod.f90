@@ -16,6 +16,11 @@
 !         ierror = 0: OK
 !                > 0: outside table range, see findkappa
 !
+!   call get_opacity_Planck_rhoT(rho, T, kappaP, ierror)
+!      -> rho [g/cm^3], T [K]  --> kappaP [cm^2/g]  (Planck mean)
+!         T <= 10^4 K: Semenov et al. (2003) Planck table
+!         T >  10^4 K: Kramers free-free + electron scattering
+!
 !==============================================================
 module opacity_table_mod
   use kind_params,  only : dp, i4b, lgt
@@ -42,6 +47,15 @@ module opacity_table_mod
                          logRmin_tab = -8.0_dp, &             ! OP & Ferguson
                          rhomax_tab  = 1.0e-7_dp, &           ! Semenov
                          rhomin_tab  = 1.0e-17_dp             ! Semenov
+  ! Planck mean opacity (Semenov table T <= 10^4 K; Kramers+kappa_es for T > 10^4 K)
+  real(dp), allocatable :: op_planck_lowT(:,:)
+  real(dp), allocatable :: op2_planck_lowT(:,:)
+  logical :: planck_table_read = .false.
+  real(dp), parameter :: T_Planck_Semenov_max = 1.0e4_dp
+  ! Kramers: kappa_ff = kff_coeff * g_ff * (1-Z)(1+X) * rho * T^(-3.5)  [cm^2/g]
+  real(dp), parameter :: kff_coeff = 3.68e22_dp
+  real(dp), parameter :: g_ff = 1.0_dp
+  real(dp), parameter :: X_abund_P = 0.7_dp, Z_abund_P = 0.02_dp  ! cosmic
   ! Flag to avoid reading the tables more than once
   logical :: opacity_initialized = .false.
 
@@ -87,8 +101,134 @@ contains
        stop
     end select
 
+    call read_semenov_planck_table()
     opacity_initialized = .true.
   end subroutine init_opacity_tables
+
+
+  !------------------------------------------------------------
+  ! read_semenov_planck_table
+  ! Read Planck mean opacity table (Semenov et al. 2003).
+  ! Uses same (logT, logrho) grid as Semenov Rosseland; op_lowT,
+  ! logTlow, logrho, NTlow, Nrho must already be set by optables.
+  !------------------------------------------------------------
+  subroutine read_semenov_planck_table()
+    use kind_params, only : i4b, dp
+    use op_params,   only : logTlow, logrho, NTlow, Nrho
+    implicit none
+    character(len=70), parameter :: file_planck = 'data/SemenovPlanckTable.data'
+    character(len=3000) line
+    character(len=5)  :: a5
+    character(len=7)  :: a7
+    character(len=10) :: a10
+    integer(i4b) :: iu, ios, i, j, alloc_err
+    integer(i4b) :: nt_read, nrho_read
+
+    if (planck_table_read) return
+    allocate(op_planck_lowT(NTlow, Nrho), stat=alloc_err)
+    if (alloc_err /= 0) then
+       write (*,'("### Error allocating op_planck_lowT ###")')
+       stop
+    end if
+
+    open(newunit=iu, file=file_planck, iostat=ios, status='old', &
+         form='formatted', action='read')
+    if (ios /= 0) then
+       write (*,'("### Error opening ", a, " ###")') trim(file_planck)
+       stop
+    end if
+
+    do
+       read(iu,'(a)') line
+       if (index(line,'# NT:') > 0) exit
+    end do
+    read(line,"(a5, i4)") a5, nt_read
+    read(iu,'(a)') line
+    read(line,"(a7, i4)") a7, nrho_read
+    if (nt_read /= NTlow .or. nrho_read /= Nrho) then
+       write (*,'("### Semenov Planck table dims mismatch: ", 2i5, " vs ", 2i5, " ###")') &
+            nt_read, nrho_read, NTlow, Nrho
+       stop
+    end if
+
+    do
+       read(iu,"(a)") line
+       if (index(line,'# log T(K)') > 0) exit
+    end do
+    read(line,"(a10, 301(f9.4,:))") a10, (logrho(j), j = 1, Nrho)
+    do i = 1, NTlow
+       read(iu,"(a)") line
+       read(line, "(f9.4, 1x, 301(f9.4,:))") logTlow(i), &
+            (op_planck_lowT(i, j), j = 1, Nrho)
+    end do
+    close(iu)
+    planck_table_read = .true.
+  end subroutine read_semenov_planck_table
+
+
+  !------------------------------------------------------------
+  ! get_opacity_Planck_rhoT
+  ! Returns Planck mean opacity [cm^2/g] for given rho, T.
+  ! T <= 10^4 K: Semenov et al. (2003) table interpolation
+  ! T >  10^4 K: Kramers free-free + electron scattering
+  !------------------------------------------------------------
+  subroutine get_opacity_Planck_rhoT(rho, T, kappaP, ierror)
+    use kind_params, only : i4b, dp, lgt
+    use op_params,   only : logTlow, logrho, NTlow, Nrho, kes, intpol
+    use spline2D_pac
+    use polint2D_pac
+    implicit none
+    real(dp), intent(in)  :: rho, T
+    real(dp), intent(out) :: kappaP
+    integer(i4b), intent(out) :: ierror
+
+    real(dp), parameter :: eps_edge = 1.0e-10_dp
+    real(dp), parameter :: tiny_rho = 1.0e-99_dp
+    real(dp), parameter :: logT_P_max = log10(T_Planck_Semenov_max)
+
+    logical(lgt), save :: first_planck = .true.
+    integer(i4b) :: alloc_err, jx1, jx2
+    real(dp) :: logTx, logrhox, rhox_eff, logkapx, dkapx
+    real(dp) :: kappa_ff, kappa_es
+
+    ierror = 0
+
+    if (.not. opacity_initialized) call init_opacity_tables()
+
+    if (T <= T_Planck_Semenov_max) then
+       ! Semenov Planck table (log10(kappa) stored)
+       rhox_eff = max(rho, tiny_rho)
+       if (rhox_eff > rhomax_tab .or. rhox_eff < rhomin_tab) then
+          rhox_eff = clamp_interior(rhox_eff, rhomin_tab, rhomax_tab, eps_edge)
+          ierror = 1
+       end if
+       logTx = log10(max(T, tlow_tab))
+       logTx = clamp_interior(logTx, log10(tlow_tab), logT_P_max, eps_edge)
+       logrhox = log10(rhox_eff)
+
+       if (intpol == 'spline') then
+          if (first_planck) then
+             allocate(op2_planck_lowT(NTlow, Nrho), stat=alloc_err)
+             call splie2(logTlow, logrho, op_planck_lowT, op2_planck_lowT)
+             first_planck = .false.
+          end if
+          logkapx = splin2(logTlow, logrho, op_planck_lowT, op2_planck_lowT, logTx, logrhox)
+       else
+          jx1 = NTlow
+          jx2 = Nrho
+          call hunt(logTlow, NTlow, logTx, jx1)
+          call hunt(logrho, Nrho, logrhox, jx2)
+          call polin2mod(logTlow, logrho, op_planck_lowT, jx1, jx2, logTx, logrhox, logkapx, dkapx)
+       end if
+       kappaP = 10.0_dp**logkapx
+    else
+       ! T > 10^4 K: Kramers + electron scattering
+       kappa_ff = kff_coeff * g_ff * (1.0_dp - Z_abund_P) * (1.0_dp + X_abund_P) &
+            * rho * T**(-3.5_dp)
+       kappa_es = kes
+       kappaP = kappa_ff + kappa_es
+    end if
+  end subroutine get_opacity_Planck_rhoT
 
 
   pure real(dp) function clamp_interior(x, xmin, xmax, eps_edge) result(y)
@@ -634,12 +774,12 @@ contains
       END DO
       CLOSE (iu_op)
       !-- Test output
-      WRITE (*,"(a70)") file_highT
-      WRITE (*, "('log R:', 50(f6.2,:))") (logRhigh(j), j = 1, NRhigh)
-      DO i = 1, NThigh
-         WRITE (*, "(51(f7.3,:))") logThigh(i), &
-              (op_highT(i, j), j = 1, NRhigh)
-      END DO
+      !WRITE (*,"(a70)") file_highT
+      !WRITE (*, "('log R:', 50(f6.2,:))") (logRhigh(j), j = 1, NRhigh)
+      !DO i = 1, NThigh
+      !   WRITE (*, "(51(f7.3,:))") logThigh(i), &
+      !        (op_highT(i, j), j = 1, NRhigh)
+      !END DO
 
       !--------------------------------------------------------
       ! Read the opacity table for temperatures around 10**4 K
@@ -699,12 +839,12 @@ contains
       END DO
       CLOSE (iu_op)
       !-- Test output
-      WRITE (*,"(a70)") file_midT
-      WRITE (*, "('log R:', 50(f7.3,:))") (logRmid(j), j = 1, NRmid)
-      DO i = 1, NTmid
-         WRITE (*, "(51(f7.3,:))") logTmid(i), &
-              (op_midT(i, j), j = 1, NRmid)
-      END DO
+      !WRITE (*,"(a70)") file_midT
+      !WRITE (*, "('log R:', 50(f7.3,:))") (logRmid(j), j = 1, NRmid)
+      !DO i = 1, NTmid
+      !   WRITE (*, "(51(f7.3,:))") logTmid(i), &
+      !        (op_midT(i, j), j = 1, NRmid)
+      !END DO
       
       !----------------------------------------------
       ! Read the opacity table for low temperatures
@@ -761,13 +901,13 @@ contains
       END DO
       CLOSE (iu_op)
       !-- Test output
-      WRITE (*,*)
-      WRITE (*,"(a70)") file_lowT
-      WRITE (*, "('log rho:', 301(f9.4,:))") (logrho(j), j = 1, Nrho)
-      DO i = 1, NTlow
-         WRITE (*, "(f9.4, 1x, 301(f9.4,:))") logTlow(i), &
-              (op_lowT(i, j), j = 1, Nrho)
-      END DO
+      !WRITE (*,*)
+      !WRITE (*,"(a70)") file_lowT
+      !WRITE (*, "('log rho:', 301(f9.4,:))") (logrho(j), j = 1, Nrho)
+      !DO i = 1, NTlow
+      !   WRITE (*, "(f9.4, 1x, 301(f9.4,:))") logTlow(i), &
+      !        (op_lowT(i, j), j = 1, Nrho)
+      !END DO
 
       !print *, 'size(logThigh) =', size(logThigh)
       !print *, 'size(logRhigh) =', size(logRhigh)
@@ -827,7 +967,7 @@ contains
     integer(i4b) :: jx1, jx2
 
     ! Opacity table parameters
-    real(dp), parameter :: dlogT_tab = 0.01_dp
+    real(dp), parameter :: dlogT_tab = 0.05_dp
     real(dp) :: logRx, logrhox, logTx, logkapx, dkapx
     real(dp) :: logTcrit_OA_tab, kap_high, kap_low, w
 
@@ -1063,7 +1203,6 @@ SUBROUTINE findkappa_OP_AES_S03(rhox, tempx, kappa, ierror)
   real(dp), intent(out)     :: kappa
 
   ! Opacity table parameters
-  !real(dp), parameter :: dlogT_OA_tab = 0.01_dp, dlogT_AS_tab = 0.01_dp
   real(dp), parameter :: dlogT_OA_tab = 0.05_dp, dlogT_AS_tab = 0.05_dp
   real(dp), parameter :: eps_edge = 1.0e-10_dp
   real(dp), parameter :: tiny_rho = 1.0e-99_dp
@@ -1383,7 +1522,7 @@ END SUBROUTINE findkappa_OP_AES_S03
       real(dp), intent(out)     :: kappa
 
       ! Opacity table parameters
-      real(dp), parameter :: dlogT_OF_tab = 0.01_dp, dlogT_FS_tab = 0.01_dp
+      real(dp), parameter :: dlogT_OF_tab = 0.05_dp, dlogT_FS_tab = 0.05_dp
 
       integer(i4b), save      :: n_warn = 0
       integer(i4b), parameter :: max_warn = 100

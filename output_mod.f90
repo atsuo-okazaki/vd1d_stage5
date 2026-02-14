@@ -22,6 +22,7 @@ module output_mod
   use units_disk_mod, only : t_dim, r_dim, sigma_dim, omegaK_dim
   use mdot_units_mod, only : mdot_edd_unit, mdot_pde_unit
   use disk_thermal_mod, only : heating_cooling_cell, Qvis_and_Qrad
+  use opacity_table_mod, only : get_opacity_Planck_rhoT
 
 contains
 
@@ -304,11 +305,11 @@ contains
     real(dp),    intent(in)  :: t
 
     integer(i4b), save :: iu_st = -1
-    integer(i4b) :: i
+    integer(i4b) :: i, ierr_planck
     character(len=64) :: fname
     real(dp) :: t_cgs, r_cgs, sigma_cgs, omegaK_cgs
     real(dp) :: nu_dim_loc, T_loc
-    real(dp) :: kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc
+    real(dp) :: kappaR_loc, tauR_loc, kappaP_loc, Qvis_loc, Qrad_loc
     real(dp) :: Tsurf
     real(dp) :: cs2
     real(dp), parameter :: tiny_sigma = 1.0e-8_dp
@@ -407,8 +408,10 @@ contains
              cycle
           end if
 
+          call get_opacity_Planck_rhoT(rho(it, i), T_loc, kappaP_loc, ierr_planck)
+          if (ierr_planck /= 0) kappaP_loc = kappaR_loc
           call Qvis_and_Qrad(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                             kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc)
+                             kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc, kappaP_loc=kappaP_loc)
    
           !! Qrad_loc; radiative flux from both surfaces
           !! Qrad_loc = 2 * sbc *Tsurf**4
@@ -456,11 +459,11 @@ contains
     real(dp),    intent(in)  :: t
 
     integer(i4b), save :: iu_dtl = -1
-    integer(i4b) :: i
+    integer(i4b) :: i, ierr_planck
     character(len=64) :: fname
     real(dp) :: t_cgs, r_cgs, sigma_cgs, omegaK_cgs
     real(dp) :: nu_dim_loc, T_loc
-    real(dp) :: kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc
+    real(dp) :: kappaR_loc, tauR_loc, kappaP_loc, Qvis_loc, Qrad_loc
     real(dp) :: Tsurf
     real(dp) :: cs2
     real(dp), parameter :: tiny_sigma = 1.0e-8_dp
@@ -547,8 +550,10 @@ contains
              cycle
           end if
 
+          call get_opacity_Planck_rhoT(rho(it, i), T_loc, kappaP_loc, ierr_planck)
+          if (ierr_planck /= 0) kappaP_loc = kappaR_loc
           call Qvis_and_Qrad(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                             kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc)
+                             kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc, kappaP_loc=kappaP_loc)
    
           !! Qrad_loc; radiative flux from both surfaces
           !! Qrad_loc = 2 * sbc *Tsurf**4

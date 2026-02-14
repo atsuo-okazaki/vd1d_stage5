@@ -14,9 +14,9 @@
 module irradiation_mod
   use kind_params, only : dp, i4b
   use constants,   only : pi, gg, cc
-  use mod_global,  only : r, nu, sigmat, use_irradiation, use_be_decretion, &
-                          M_star, kappa_es, L_star, R0, q, eta_acc, f_edd_cap, &
-                          nu0_dim, nu0_nd, t0
+  use mod_global,  only : r, nu, sigmat, use_irradiation, use_irradiation_delay, use_be_decretion, &
+                          use_finite_irradiation_source, M_star, kappa_es, L_star, R_star, R0, &
+                          q, eta_acc, f_edd_cap, nu0_dim, nu0_nd, t0, tau_irr_lag_mode, tau_irr_lag_nd
   use units_disk_mod, only : mdot_edd_unit, r_dim
   use disk_flux_mod, only : measure_mdot_inner_from_arrays
   implicit none
@@ -41,11 +41,7 @@ module irradiation_mod
   real(dp) :: Lacc_inst_last  = 0.0_dp
   real(dp) :: Lacc_lag_last   = 0.0_dp
 
-  ! Switch for irradiation delay.
-  ! default: delay_sec = 0 (consistent with LOH24 azimuthal averaging)
-  logical, save :: use_irradiation_delay = .false.
-
-  ! Buffer for delayed irradiation
+  ! Buffer for delayed irradiation (use_irradiation_delay from mod_global)
   integer(i4b) :: ibuf = 0
   real(dp), allocatable :: t_hist(:)     ! [s]
   real(dp), allocatable :: mdot_hist(:)  ! [g/s]
@@ -111,6 +107,10 @@ end subroutine push_Larrive
 ! fixes the O(n^2) bracketing and uses sorting of valid indices.
 !---------------------------------------------------------------
 real(dp) function sample_Lacc_at(t_target)
+  ! Sample luminosity that ARRIVES at time t_target (arrival-time model).
+  ! - t_target < earliest arrival -> 0 (nothing arrived yet)
+  ! - t_target > latest arrival   -> latest value
+  ! - else: linear interpolation between bracketing arrival times
   use kind_params, only : dp, i4b
   implicit none
   real(dp), intent(in) :: t_target
@@ -122,66 +122,46 @@ real(dp) function sample_Lacc_at(t_target)
   real(dp), parameter :: eps_t = 1.0e-12_dp
 
   if (.not. use_irradiation_delay) then
-     ! In instantaneous mode, "lagged" == "instantaneous".
      sample_Lacc_at = Lacc_inst_last
      return
   end if
 
-  ! --- keep your existing buffered + sorted interpolation here ---
-  !sample_Lacc_at = 0.0_dp
-  !if (.not. buffer_ready) return
-  !
-  !! workspace
-  !if (.not. allocated(idx_work) .or. idx_work_size < nbuf) then
-  !  if (allocated(idx_work)) deallocate(idx_work)
-  !  allocate(idx_work(nbuf))
-  !  idx_work_size = nbuf
-  !end if
-  !
-  !! valid entries
-  !nvalid = 0
-  !do i = 1, nbuf
-  !  if (t_arrive_hist(i) >= 0.0_dp) then
-  !    nvalid = nvalid + 1
-  !    idx_work(nvalid) = i
-  !  end if
-  !end do
-  !if (nvalid < 2) return
-  !
-  !! sort by arrival time
-  !call sort_idx_by_key_real_safe(t_arrive_hist, idx_work, nvalid)
-  !
-  !tmin = t_arrive_hist(idx_work(1))
-  !tmax = t_arrive_hist(idx_work(nvalid))
-  !
-  !if (t_target < tmin - eps_t) then
-  !   sample_Lacc_at = 0.0_dp
-  !   return
-  !end if
-  !if (abs(t_target - tmin) <= eps_t) then
-  !   sample_Lacc_at = Lacc_hist(idx_work(1))
-  !   return
-  !end if
-  !
-  !k = bracket_rightmost_leq(t_arrive_hist, idx_work, nvalid, t_target)
-  !
-  !! --- hard safety clamp ---
-  !if (k < 1) k = 1
-  !if (k > nvalid-1) k = nvalid-1
-  !
-  !! --- validate indices before using them ---
-  !if (idx_work(k)   < 1 .or. idx_work(k)   > nbuf) then
-  !   write(*,*) 'FATAL: idx_work(k) out of range:', k, idx_work(k), ' nbuf=', nbuf
-  !   error stop
-  !end if
-  !if (idx_work(k+1) < 1 .or. idx_work(k+1) > nbuf) then
-  !   write(*,*) 'FATAL: idx_work(k+1) out of range:', k+1, idx_work(k+1), ' nbuf=', nbuf
-  !   error stop
-  !end if
-  !
-  !sample_Lacc_at = lerp_by_idx(t_arrive_hist, Lacc_hist, &
-  !                            idx_work(k), idx_work(k+1), t_target)
+  sample_Lacc_at = 0.0_dp
+  if (.not. buffer_ready) return
 
+  if (.not. allocated(idx_work) .or. idx_work_size < nbuf) then
+    if (allocated(idx_work)) deallocate(idx_work)
+    allocate(idx_work(nbuf))
+    idx_work_size = nbuf
+  end if
+
+  nvalid = 0
+  do i = 1, nbuf
+    if (t_arrive_hist(i) >= 0.0_dp) then
+      nvalid = nvalid + 1
+      idx_work(nvalid) = i
+    end if
+  end do
+
+  if (nvalid == 0) return
+  if (nvalid == 1) then
+    if (t_target >= t_arrive_hist(idx_work(1)) - eps_t) sample_Lacc_at = Lacc_hist(idx_work(1))
+    return
+  end if
+
+  call sort_idx_by_key_real_safe(t_arrive_hist, idx_work, nvalid)
+  tmin = t_arrive_hist(idx_work(1))
+  tmax = t_arrive_hist(idx_work(nvalid))
+
+  if (t_target < tmin - eps_t) return
+  if (t_target >= tmax - eps_t) then
+    sample_Lacc_at = Lacc_hist(idx_work(nvalid))
+    return
+  end if
+
+  k = bracket_rightmost_leq(t_arrive_hist, idx_work, nvalid, t_target)
+  k = max(1, min(k, nvalid - 1))
+  sample_Lacc_at = lerp_by_idx(t_arrive_hist, Lacc_hist, idx_work(k), idx_work(k+1), t_target)
 end function sample_Lacc_at
 
 
@@ -375,6 +355,40 @@ subroutine init_irradiation_buffer(nbuf_in)
   buffer_ready = .true.
 end subroutine init_irradiation_buffer
 
+!---------------------------------------------------------------
+! Save/load arrival-time buffer for checkpoint (use_irradiation_delay only)
+!---------------------------------------------------------------
+subroutine save_irradiation_buffer(iu)
+  integer(i4b), intent(in) :: iu
+  logical :: written
+  written = use_irradiation_delay .and. allocated(t_arrive_hist)
+  write(iu) written
+  if (.not. written) return
+  write(iu) nbuf, head_arrive, nvalid_arrive
+  write(iu) t_arrive_hist(:)
+  write(iu) Lacc_hist(:)
+end subroutine save_irradiation_buffer
+
+subroutine load_irradiation_buffer(iu)
+  integer(i4b), intent(in) :: iu
+  logical :: written
+  integer(i4b) :: nbuf_in, head_in, nvalid_in
+  real(dp), allocatable :: t_tmp(:), L_tmp(:)
+  read(iu) written
+  if (.not. written) return
+  read(iu) nbuf_in, head_in, nvalid_in
+  if (use_irradiation_delay .and. allocated(t_arrive_hist) .and. nbuf_in == nbuf) then
+    read(iu) t_arrive_hist(:)
+    read(iu) Lacc_hist(:)
+    head_arrive   = head_in
+    nvalid_arrive = nvalid_in
+  else
+    allocate(t_tmp(nbuf_in), L_tmp(nbuf_in))
+    read(iu) t_tmp(:)
+    read(iu) L_tmp(:)
+    deallocate(t_tmp, L_tmp)
+  end if
+end subroutine load_irradiation_buffer
 
 subroutine set_irradiation_luminosity_from_arrays(t_nd_now, sigma_nd, nu_nd, do_push)
   real(dp), intent(in) :: t_nd_now
@@ -403,31 +417,35 @@ subroutine set_irradiation_luminosity_from_arrays(t_nd_now, sigma_nd, nu_nd, do_
 
   call measure_mdot_inner_from_arrays(sigma_nd, nu_nd, mdot_inst)
 
-  ! Optional history (keep for diagnostics / future delay model)
-  if (push) then
-    if (.not. buffer_ready) then
-      ! You may choose to silently skip instead of stopping.
-      ! call init_irradiation_buffer(nbuf_default)  ! only if you want auto-init
-    else
-      call push_mdot_history(t_phys, mdot_inst)
-    end if
-  end if
-
   Ledd = 4.0_dp*pi*gg*M_star*cc / max(kappa_es, 1.0e-99_dp)
-
-  ! Instantaneous accretion luminosity
   Lacc_inst = max(0.0_dp, eta_acc) * max(0.0_dp, mdot_inst) * cc*cc
 
-  if (f_edd_cap > 0.0_dp) then
-    L_irr = min(Lacc_inst, f_edd_cap * Ledd)
+  ! Arrival-time model: push (t_arrive, Lacc) where t_arrive = t_phys + delay
+  ! Then sample L_irr = luminosity arriving at current time t_phys
+  if (use_irradiation_delay) then
+    block
+      real(dp) :: delay_sec, t_arrive, Lacc_capped
+      delay_sec = compute_delay_sec(nu_inner_nd=nu_nd(1))
+      t_arrive = t_phys + delay_sec
+      Lacc_capped = Lacc_inst
+      if (f_edd_cap > 0.0_dp) Lacc_capped = min(Lacc_inst, f_edd_cap * Ledd)
+      if (push .and. buffer_ready) call push_Larrive(t_arrive, Lacc_capped)
+      L_irr = sample_Lacc_at(t_phys)
+      delay_sec_last = delay_sec
+      Lacc_lag_last  = L_irr
+    end block
   else
-    L_irr = Lacc_inst
+    if (f_edd_cap > 0.0_dp) then
+      L_irr = min(Lacc_inst, f_edd_cap * Ledd)
+    else
+      L_irr = Lacc_inst
+    end if
+    delay_sec_last  = 0.0_dp
+    Lacc_lag_last   = Lacc_inst
   end if
 
-  delay_sec_last  = 0.0_dp
   Ledd_last       = Ledd
   Lacc_inst_last  = Lacc_inst
-  Lacc_lag_last   = Lacc_inst   ! for logging compatibility
 
   call set_loh24_params(L_irr)
 end subroutine set_irradiation_luminosity_from_arrays
@@ -460,37 +478,41 @@ end subroutine set_irradiation_luminosity_from_arrays
     mdot_hist(ibuf) = mdot_phys
   end subroutine push_mdot_history
 
-  real(dp) function compute_delay_sec()
-    !real(dp) :: r_in_cgs, nu_dim_in
-    !real(dp), parameter :: tiny = 1.0e-99_dp
-    !real(dp), parameter :: f_delay = 0.1_dp  !  1.0_dp   ! tunable O(1) factor
-    !integer(i4b), parameter :: in_loc = 1
+  real(dp) function compute_delay_sec(nu_inner_nd)
+    ! Delay time [s].
+    !   tau_irr_lag_mode='explicit': tau_irr_lag_nd * t0
+    !   tau_irr_lag_mode='viscous':  tau_irr_lag_nd * (r_in^2 / nu_in) at inner edge
+    real(dp), intent(in), optional :: nu_inner_nd
 
-    if (.not. use_irradiation_delay) then
-       compute_delay_sec = 0.0_dp
-       return
+    real(dp) :: r_in_cgs, nu_dim_in
+    real(dp), parameter :: tiny = 1.0e-99_dp
+
+    compute_delay_sec = 0.0_dp
+    if (.not. use_irradiation_delay) return
+
+    if (trim(adjustl(tau_irr_lag_mode)) == 'viscous') then
+       ! Viscous time at inner edge: t_visc = r^2 / nu
+       if (.not. present(nu_inner_nd)) then
+          compute_delay_sec = tau_irr_lag_nd * t0
+          compute_delay_sec = min(compute_delay_sec, delay_cap)
+          return
+       end if
+       r_in_cgs = r_dim(r(1))
+       nu_dim_in = 0.0_dp
+       if (nu0_dim > 0.0_dp .and. nu0_nd > 0.0_dp) then
+          nu_dim_in = (nu_inner_nd / max(nu0_nd, tiny)) * nu0_dim
+       end if
+       if (r_in_cgs <= 0.0_dp .or. nu_dim_in <= 0.0_dp) then
+          compute_delay_sec = delay_cap
+       else
+          compute_delay_sec = tau_irr_lag_nd * (r_in_cgs * r_in_cgs) / nu_dim_in
+          compute_delay_sec = min(compute_delay_sec, delay_cap)
+       end if
+    else
+       ! Explicit: fixed delay in dimensionless units
+       compute_delay_sec = tau_irr_lag_nd * t0
+       compute_delay_sec = min(compute_delay_sec, delay_cap)
     end if
-
-    ! --- keep the old model here for future experiments ---
-    ! A reasonable choice: viscous time at the inner edge.
-    ! t_visc ~ r_in^2 / nu_in (up to order-unity factors)
-    !
-    ! nu(1) is dimensionless, so:
-    !   nu_dim_in = nu(1)/nu0_nd * nu0_dim   [cm^2/s]
-    !
-    !r_in_cgs  = r_dim(r(in_loc))
-    !nu_dim_in = 0.0_dp
-    !
-    !if (nu0_dim > 0.0_dp .and. nu0_nd > 0.0_dp) then
-    !   nu_dim_in = (nu(in_loc) / max(nu0_nd, tiny)) * nu0_dim
-    !end if
-    !
-    !if (r_in_cgs <= 0.0_dp .or. nu_dim_in <= 0.0_dp) then
-    !   compute_delay_sec = delay_cap
-    !else
-    !   compute_delay_sec = f_delay * r_in_cgs*r_in_cgs / nu_dim_in
-    !   compute_delay_sec = min(compute_delay_sec, delay_cap)
-    !end if
   end function compute_delay_sec
 
 real(dp) function sample_mdot_at(t_target)
@@ -609,11 +631,14 @@ subroutine compute_shadow_loggrid_hyst(nr, r_cgs, H_cgs, halfwin, eps_on, eps_of
   if (nr <= 0) return
 
   ! Build H/r
+!$omp parallel do default(shared) private(i)
   do i = 1, nr
      hoverr(i) = H_cgs(i) / max(r_cgs(i), tiny)
   end do
+!$omp end parallel do
 
   ! Smooth on log-r grid (index window)
+!$omp parallel do default(shared) private(i, j, j1, j2, cnt)
   do i = 1, nr
      j1  = max(1, i-halfwin)
      j2  = min(nr, i+halfwin)
@@ -624,6 +649,7 @@ subroutine compute_shadow_loggrid_hyst(nr, r_cgs, H_cgs, halfwin, eps_on, eps_of
      end do
      hoverr_s(i) = hoverr_s(i) / max(real(cnt,dp), 1.0_dp)
   end do
+!$omp end parallel do
 
   ! Envelope + true hysteresis
   shadow(1)  = .false.
@@ -671,15 +697,18 @@ subroutine compute_shadow_loggrid_smooth(nr, r_cgs, H_cgs, halfwin, eps_shadow, 
   !-----------------------------------------
   ! Build H/r (dimensionless); safe divide
   !-----------------------------------------
+!$omp parallel do default(shared) private(i)
   do i = 1, nr
      hoverr(i) = H_cgs(i) / max(r_cgs(i), 1.0e-99_dp)
   end do
+!$omp end parallel do
 
   !-----------------------------------------
   ! Smooth H/r on a log-r grid using a simple
   ! moving average in index space.
   ! (Log grid => equal spacing in ln r, so this is OK.)
   !-----------------------------------------
+!$omp parallel do default(shared) private(i, j, j1, j2, cnt)
   do i = 1, nr
      j1  = max(1, i-halfwin)
      j2  = min(nr, i+halfwin)
@@ -690,6 +719,7 @@ subroutine compute_shadow_loggrid_smooth(nr, r_cgs, H_cgs, halfwin, eps_shadow, 
      end do
      hoverr_s(i) = hoverr_s(i) / max(real(cnt,dp), 1.0_dp)
   end do
+!$omp end parallel do
 
   !-----------------------------------------
   ! Shadow decision with hysteresis:
@@ -1084,6 +1114,7 @@ end subroutine compute_shadow_loggrid_smooth
 
   subroutine build_Qirr_profile_eq16_with_raw(n, r_cgs, H_cgs_in, Qirr_raw_out, Qirr_out, dYdXi_out, Y_out)
     use kind_params, only : dp, i4b
+    use mod_global, only : use_finite_irradiation_source, R_star
     use units_disk_mod, only : r_dim
     implicit none
     integer(i4b), intent(in) :: n
@@ -1095,6 +1126,7 @@ end subroutine compute_shadow_loggrid_smooth
     real(dp), intent(out) :: Y_out(n)
 
     real(dp) :: xi(n), Y(n), dYdXi(n)
+    real(dp) :: alpha_star, alpha_flare, factor, pref_star, Qirr_flat_star
     integer(i4b) :: i
 
     if (rin_cgs <= 0.0_dp .or. L1 <= 0.0_dp .or. A1 <= 0.0_dp) then
@@ -1110,7 +1142,7 @@ end subroutine compute_shadow_loggrid_smooth
     end do
 
     call compute_Y_dYdXi_sg(n=n, xi=xi, r_cgs=r_cgs, H_cgs=H_cgs_in, &
-                          halfwin=5, poly_order=2, Y=Y, dYdXi=dYdXi)
+                          halfwin=7, poly_order=2, Y=Y, dYdXi=dYdXi)
 
     ! Raw Eq.16 (can be negative)
     call compute_Qirr_eq16_raw(n=n, xi=xi, Y=Y, dYdXi=dYdXi, rin_cgs=rin_cgs, &
@@ -1120,6 +1152,31 @@ end subroutine compute_shadow_loggrid_smooth
     ! Enforce non-negative irradiation for the solver
     Qirr_out(:) = max(Qirr_raw_out(:), 0.0_dp)
 
+    ! Finite-size stellar disk: additive grazing angle (Chiang & Goldreich; LOH24)
+    ! alpha_total = alpha_star + alpha_flare
+    !   alpha_star = 0.4*R_star/r (finite stellar disk)
+    !   alpha_flare = xi*dY/dxi = r*d(H/r)/dr (disk flaring, already in LOH24)
+    ! alpha_flare >= alpha_star: Qirr = Qirr_LOH24 * (alpha_star+alpha_flare)/alpha_flare
+    ! alpha_flare <  alpha_star: Qirr = (alpha_star+alpha_flare)/alpha_star * Qirr_flat_star
+    !   (smooth, no blow-up; Qirr_flat_star = pref*0.2*(R_star/rin)/xi^3)
+    if (use_finite_irradiation_source .and. R_star > 0.0_dp) then
+       pref_star = (A1 * L1) / (2.0_dp * pi * rin_cgs * rin_cgs)
+       do i = 1, n
+          if (r_cgs(i) > 0.0_dp) then
+             alpha_star = 0.4_dp * R_star / r_cgs(i)
+             alpha_flare = max(xi(i) * dYdXi(i), 0.0_dp)
+             Qirr_flat_star = pref_star * 0.2_dp * (R_star / rin_cgs) / (xi(i)**3)
+             if (alpha_flare >= alpha_star) then
+                factor = (alpha_star + alpha_flare) / alpha_flare
+                Qirr_out(i) = Qirr_out(i) * factor
+             else
+                factor = (alpha_star + alpha_flare) / alpha_star
+                Qirr_out(i) = factor * Qirr_flat_star
+             end if
+          end if
+       end do
+    end if
+
     dYdXi_out(:) = dYdXi(:)
     Y_out(:)     = Y(:)
   end subroutine build_Qirr_profile_eq16_with_raw
@@ -1127,6 +1184,7 @@ end subroutine compute_shadow_loggrid_smooth
 
 subroutine build_Qirr_profile_eq16(n, r_cgs, H_cgs_in, Qirr_out, dYdXi_out)
   use kind_params, only : dp, i4b
+  use mod_global, only : use_finite_irradiation_source, R_star
   use units_disk_mod, only : r_dim
   implicit none
   integer(i4b), intent(in) :: n
@@ -1136,6 +1194,7 @@ subroutine build_Qirr_profile_eq16(n, r_cgs, H_cgs_in, Qirr_out, dYdXi_out)
   real(dp), intent(out) :: dYdXi_out(n)
 
   real(dp) :: xi(n), Y(n), dYdXi(n)
+  real(dp) :: alpha_star, alpha_flare, factor, pref_star, Qirr_flat_star
   integer(i4b) :: i
 
   if (rin_cgs <= 0.0_dp .or. L1 <= 0.0_dp .or. A1 <= 0.0_dp) then
@@ -1149,10 +1208,29 @@ subroutine build_Qirr_profile_eq16(n, r_cgs, H_cgs_in, Qirr_out, dYdXi_out)
   end do
 
   call compute_Y_dYdXi_sg(n=n, xi=xi, r_cgs=r_cgs, H_cgs=H_cgs_in, &
-                        halfwin=5, poly_order=2, Y=Y, dYdXi=dYdXi)
+                        halfwin=7, poly_order=2, Y=Y, dYdXi=dYdXi)
   call compute_Qirr_eq16(n=n, xi=xi, Y=Y, dYdXi=dYdXi, rin_cgs=rin_cgs, &
                         A1=A1, L1=L1, Q12=Q12, beta1=beta1, beta2=beta2, &
                         Qirr_out=Qirr_out)
+
+  ! Finite-size stellar disk: additive grazing angle (same as _with_raw)
+  if (use_finite_irradiation_source .and. R_star > 0.0_dp) then
+     pref_star = (A1 * L1) / (2.0_dp * pi * rin_cgs * rin_cgs)
+     do i = 1, n
+        if (r_cgs(i) > 0.0_dp) then
+           alpha_star = 0.4_dp * R_star / r_cgs(i)
+           alpha_flare = max(xi(i) * dYdXi(i), 0.0_dp)
+           Qirr_flat_star = pref_star * 0.2_dp * (R_star / rin_cgs) / (xi(i)**3)
+           if (alpha_flare >= alpha_star) then
+              factor = (alpha_star + alpha_flare) / alpha_flare
+              Qirr_out(i) = Qirr_out(i) * factor
+           else
+              factor = (alpha_star + alpha_flare) / alpha_star
+              Qirr_out(i) = factor * Qirr_flat_star
+           end if
+        end if
+     end do
+  end if
 
   dYdXi_out(:) = dYdXi(:)
 end subroutine build_Qirr_profile_eq16

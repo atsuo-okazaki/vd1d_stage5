@@ -1,0 +1,11 @@
+&scurve
+  r_cgs     = 1.0e12      ! 解析する半径 [cm]
+  Sigma_min = 1.0e-2      ! Sigma 最小 [g/cm^2]
+  Sigma_max = 1.0e4       ! Sigma 最大 [g/cm^2]
+  nSigma    = 200
+  Qirr_in   = 0.0         ! qirr_mode='constant'時の照射 [erg/cm^2/s]
+  qirr_mode = 'from_file'  ! 'constant': Qirr_inを使用  'from_file': シミュレーション出力から読み込み
+  qirr_file = 'disk_t00013001.dat'  ! qirr_mode='from_file'時の入力ファイル
+  shadow    = .false.
+  outfile   = 'scurve.dat'
+/

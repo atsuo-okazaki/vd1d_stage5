@@ -45,7 +45,7 @@ contains
 
     real(dp) :: dt_phys
     real(dp) :: r_cgs(nr), Sigma_cgs(nr), OmegaK_cgs(nr)
-    real(dp) :: H_geom(nr), Y(nr), dY(nr), Qirr_prof(nr)
+    real(dp) :: H_geom(nr), Y(nr), dY(nr), dY_tmp(nr), Qirr_prof(nr)
     real(dp) :: T_old, T_new
     real(dp) :: H_loc, rho_loc, kappa_loc, tau_loc, nu_dim_loc
     real(dp) :: Qv, Qi_tmp, Qc
@@ -80,9 +80,11 @@ contains
 
     ! LOH24 Eq.(16) irradiation profile
     call build_Qirr_profile(nr, r, r_cgs, H_geom, &
-                            Y, dY, Qirr_prof, dYdXi(itp1, :))
+                            Y, dY, Qirr_prof, dY_tmp)
+    dYdXi(itp1, :) = dY_tmp(:)
 
     ! Temperature update per cell (implicit Euler + Newton)
+!$omp parallel do default(shared) private(i, T_old, T_new, H_loc, rho_loc, nu_dim_loc, kappa_loc, tau_loc, Qv, Qi_tmp, Qc)
     do i = 1, nr
 
       if (Sigma_cgs(i) <= tiny_sigma .or. OmegaK_cgs(i) <= 0.0_dp) then
@@ -129,6 +131,7 @@ contains
       nu_conv(itp1,i) = nu_new_nd(i)
 
     end do
+!$omp end parallel do
 
     ! if you keep history shadow array in mod_global:
     is_shadow(itp1, :) = shadow_cell(:)
@@ -149,7 +152,7 @@ contains
     real(dp),     intent(inout) :: nu_new_nd(nr)
 
     real(dp) :: r_cgs(nr), Sigma_cgs(nr), OmegaK_cgs(nr)
-    real(dp) :: H_geom(nr), Y(nr), dY(nr), Qirr_prof(nr)
+    real(dp) :: H_geom(nr), Y(nr), dY(nr), dY_tmp(nr), Qirr_prof(nr)
     real(dp) :: T_use
     real(dp) :: H_loc, rho_loc, kappa_loc, tau_loc, nu_dim_loc
     real(dp) :: Qv, Qi_tmp, Qc
@@ -182,8 +185,10 @@ contains
     end if
 
     call build_Qirr_profile(nr, r, r_cgs, H_geom, &
-                            Y, dY, Qirr_prof, dYdXi(it, :))
+                            Y, dY, Qirr_prof, dY_tmp)
+    dYdXi(it, :) = dY_tmp(:)
 
+!$omp parallel do default(shared) private(i, T_use, H_loc, rho_loc, nu_dim_loc, kappa_loc, tau_loc, Qv, Qi_tmp, Qc)
     do i = 1, nr
 
       if (Sigma_cgs(i) <= tiny_sigma .or. OmegaK_cgs(i) <= 0.0_dp) then
@@ -222,6 +227,7 @@ contains
       nu_conv(it,i) = nu_new_nd(i)
 
     end do
+!$omp end parallel do
 
   end subroutine rebuild_structure_from_current_T
 

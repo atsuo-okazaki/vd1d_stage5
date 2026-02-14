@@ -73,8 +73,10 @@ subroutine compute_LSigma(nr, r, nu, Sigma, LSigma)
   end select
 
   ! -- 3. LSigma (same)
+!$omp parallel do default(shared) private(i)
   do i = 1, nr
      LSigma(i) = ( mdot_edge(i) - mdot_edge(i+1) ) &
                  / ( 2.0_dp * pi * r(i) * dr_cell(i) )
   end do
+!$omp end parallel do
 end subroutine compute_LSigma

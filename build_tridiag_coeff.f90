@@ -24,9 +24,11 @@ subroutine build_tridiag_coeff(nr, r, nu, dt, theta, Sigma, a, b, c)
   end do
   r_edge(nr+1) = r(nr) + 0.5_dp*(r(nr) - r(nr-1))
 
+!$omp parallel do default(shared) private(i)
   do i = 1, nr
      dr_cell(i) = r_edge(i+1) - r_edge(i)
   end do
+!$omp end parallel do
 
   !----------------------------------------------------
   ! 2. Loop over cells and build aL_i, bL_i, cL_i
@@ -44,6 +46,7 @@ subroutine build_tridiag_coeff(nr, r, nu, dt, theta, Sigma, a, b, c)
   !
   !   where A_cell = 2π r_i Δr_i
   !----------------------------------------------------
+!$omp parallel do default(shared) private(i, dr_im1, dr_i, r_face, coef, A_L, A_C, B_C, B_R, A_cell, aL_i, bL_i, cL_i)
   do i = 1, nr
 
      if (i == 1) then
@@ -154,5 +157,6 @@ subroutine build_tridiag_coeff(nr, r, nu, dt, theta, Sigma, a, b, c)
      c(i) = -theta*dt * cL_i
 
   end do
+!$omp end parallel do
 
 end subroutine build_tridiag_coeff

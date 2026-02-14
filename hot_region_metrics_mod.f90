@@ -74,6 +74,7 @@ contains
     integer(i4b) :: istart, iend
 
     if (.not. is_init) return
+    if (iu_hot < 0) return
 
     nr = size(r_nd)
     if (size(Tmid) /= nr) return

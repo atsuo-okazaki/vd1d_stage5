@@ -1,0 +1,16 @@
+&run_control
+  do_restart = .false.
+  it_restart = 1
+  chk_file   = 'checkpoint.bin'
+  ! outfreq: disk_t*.dat for animation - keep frequent (default: nt/1000)
+  outfreq    = 0
+  ! chkfreq: checkpoint - at least 10 times (default: nt/10)
+  chkfreq    = 0
+  ! thermal_stability_freq: thermal stability output - at least 10 times (default: nt/10)
+  thermal_stability_freq = 0
+  do_thermal_stability_output = .true.
+  do_thermal_stability_all_roots = .false.
+  ! Debug/diagnostics (OFF by default for performance)
+  do_hot_region_metrics = .false.   ! T>=10^4 K extent -> hot_region_metrics.dat
+  iprint_irr = 0                    ! m_irr convergence diagnostics
+/

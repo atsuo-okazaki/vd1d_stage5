@@ -1,0 +1,253 @@
+% IRRADIATION_TREATMENT.tex
+% Irradiation treatment for CircumBinary Disks (CBD) and Be disks
+% Optically thick and optically thin regions
+% ASCII LaTeX only
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage[margin=2.5cm]{geometry}
+
+\title{Irradiation Treatment for CircumBinary and Be Disks}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Overview}
+
+This document summarizes the irradiation treatment in the 1D viscous disk code for CircumBinary Disks (CBD) and Be (classical) decretion disks. The thermal balance is governed by
+\begin{equation}
+  Q_{\mathrm{vis}} + Q_{\mathrm{irr}} = Q_{\mathrm{rad}},
+\end{equation}
+where $Q_{\mathrm{vis}}$ is viscous heating, $Q_{\mathrm{irr}}$ is irradiation heating (per unit area, from both disk faces), and $Q_{\mathrm{rad}}$ is radiative cooling. The formulae for $Q_{\mathrm{irr}}$ and $Q_{\mathrm{rad}}$ differ between optically thick and optically thin regions.
+
+\section{Irradiation Heating $Q_{\mathrm{irr}}$}
+
+\subsection{Base Formulation: LOH24 Eq.\,(16)}
+
+The code uses the orbit-averaged irradiation flux from Lee, Okazaki \& Hayasaki (2024; LOH24) for a circumbinary disk around a point-like central source. In dimensionless form ($\xi = r/r_{\mathrm{in}}$),
+\begin{equation}
+  Q_{\mathrm{irr}} = \frac{A_1 L_1}{2\pi r_{\mathrm{in}}^2}\,
+  \frac{1}{\xi}\,
+  \left[ (1+Q_{12})\,\frac{dY}{d\xi}
+       - \frac{\beta_1 + Q_{12}\beta_2}{\xi^2}\,
+         \left( \frac{Y}{\xi} - \frac{1}{2}\frac{dY}{d\xi} \right) \right],
+  \label{eq:Qirr_LOH24}
+\end{equation}
+where $Y = H/r$ (aspect ratio), $dY/d\xi$ is the flaring gradient, $A_1 = 1 - \mathrm{albedo}$, $L_1$ is the effective luminosity, and $\beta_1$, $\beta_2$, $Q_{12}$ depend on the binary mass ratio $q$ and gap parameter $C_{\mathrm{gap}}$ (LOH24).
+
+\subsection{CBD Case}
+
+For CircumBinary Disks:
+\begin{itemize}
+  \item $L_1 = L_{\mathrm{acc}}/(1+q)$ (or similar), with $L_{\mathrm{acc}} = \eta_{\mathrm{acc}} \dot{M} c^2$.
+  \item Optional irradiation delay: $L_{\mathrm{irr}}(t) = L_{\mathrm{acc}}(t - \tau)$ where $\tau$ is either explicit (fixed) or viscous ($\tau \propto r_{\mathrm{in}}^2/\nu_{\mathrm{in}}$).
+  \item Point-source assumption in Eq.\,(\ref{eq:Qirr_LOH24}); the central binary is treated as a single luminosity source.
+\end{itemize}
+
+\subsection{Be Disk Case}
+
+For Be (classical) decretion disks:
+\begin{itemize}
+  \item $L_1 = L_{\star}$ (stellar luminosity); no accretion-powered irradiation delay.
+  \item Finite stellar size is important: the star subtends a significant solid angle at the inner disk.
+\end{itemize}
+
+\subsection{Finite-Size Irradiation Source (Chiang \& Goldreich)}
+
+When the central source has finite radius $R_{\star}$, the grazing angle is augmented. Following Chiang \& Goldreich (1997) and LOH24:
+\begin{equation}
+  \alpha_{\mathrm{total}} = \alpha_{\mathrm{star}} + \alpha_{\mathrm{flare}},
+  \label{eq:alpha_total}
+\end{equation}
+where
+\begin{align}
+  \alpha_{\mathrm{star}} &= 0.4\,\frac{R_{\star}}{r},
+  \label{eq:alpha_star} \\
+  \alpha_{\mathrm{flare}} &= \xi\,\frac{dY}{d\xi} = r\,\frac{d(H/r)}{dr}.
+  \label{eq:alpha_flare}
+\end{align}
+The irradiation is scaled:
+\begin{itemize}
+  \item If $\alpha_{\mathrm{flare}} \ge \alpha_{\mathrm{star}}$:
+    $Q_{\mathrm{irr}} \gets Q_{\mathrm{irr}}^{\mathrm{LOH24}} \times
+    (\alpha_{\mathrm{star}} + \alpha_{\mathrm{flare}})/\alpha_{\mathrm{flare}}$.
+  \item If $\alpha_{\mathrm{flare}} < \alpha_{\mathrm{star}}$:
+    $Q_{\mathrm{irr}} = (\alpha_{\mathrm{star}} + \alpha_{\mathrm{flare}})/\alpha_{\mathrm{star}}
+    \times Q_{\mathrm{irr}}^{\mathrm{flat,star}}$, with
+    $Q_{\mathrm{irr}}^{\mathrm{flat,star}} \propto (R_{\star}/r_{\mathrm{in}})/\xi^3$.
+\end{itemize}
+
+\section{Radiative Cooling $Q_{\mathrm{rad}}$}
+
+\subsection{Optically Thick Region ($\tau_R \gtrsim 1$)}
+
+In the diffusion limit (e.g., Kato, Fukue \& Mineshige 2008, Eq.\,3.38):
+\begin{equation}
+  Q_{\mathrm{rad}}^{\mathrm{thick}} = \frac{64\,\sigma_{\mathrm{SB}} T^4}{3\,\kappa_R\,\Sigma},
+  \label{eq:Qrad_thick}
+\end{equation}
+where $\kappa_R$ is the Rosseland mean opacity, $\Sigma$ is the surface density, and $\tau_R = \kappa_R\Sigma/2$ (one-side optical depth). The Rosseland mean is appropriate for diffusion through an optically thick medium.
+
+\subsection{Optically Thin Region ($\tau_R \ll 1$)}
+
+In the optically thin limit, cooling is dominated by emission. D'Alessio et al.\ (1998) show that the cooling rate scales with the Planck mean opacity $\kappa_P$:
+\begin{equation}
+  \Lambda_d = 4\pi\kappa_P\rho\left( \frac{\sigma_{\mathrm{SB}}T^4}{\pi} - J_d \right),
+  \label{eq:Lambda_DAlessio}
+\end{equation}
+which in the optically thin limit gives $Q_{\mathrm{rad}} \propto \kappa_P \Sigma \sigma_{\mathrm{SB}} T^4$. The implemented form (per unit area, both faces) is
+\begin{equation}
+  Q_{\mathrm{rad}}^{\mathrm{thin}} = 2\,\kappa_P\,\Sigma\,\sigma_{\mathrm{SB}}\,T^4.
+  \label{eq:Qrad_thin}
+\end{equation}
+Planck mean opacity is used because emission weights the spectrum by the Planck function, unlike the Rosseland mean used for radiative diffusion.
+
+\subsection{Bridging Between Thick and Thin}
+
+A smooth transition is used:
+\begin{equation}
+  Q_{\mathrm{rad}} = \frac{1}{\displaystyle \frac{1-w}{Q_{\mathrm{rad}}^{\mathrm{thin}}}
+    + \frac{w}{Q_{\mathrm{rad}}^{\mathrm{thick}}}},\quad
+  w = \frac{\tau_R}{1 + \tau_R}.
+  \label{eq:Qrad_bridge}
+\end{equation}
+
+\section{Opacity Tables}
+
+\subsection{Rosseland Mean $\kappa_R$}
+
+OPAL, Ferguson, AESOPUS, Semenov et al.\ (2003) tables are used, depending on temperature and density.
+
+\subsection{Planck Mean $\kappa_P$: Calculation Method}
+
+The Planck mean opacity $\kappa_P$ is required for optically thin radiative cooling (Eq.\,\ref{eq:Qrad_thin}). The calculation switches at a critical temperature:
+
+\paragraph{Temperature $T \le 10^4\,\mathrm{K}$:} Semenov et al.\ (2003) Planck mean table.
+\begin{itemize}
+  \item File: \texttt{data/SemenovPlanckTable.data}
+  \item Grid: $\log_{10}(T/\mathrm{K})$ from 1.0 to 4.0 (i.e., $10\,\mathrm{K}$ to $10^4\,\mathrm{K}$), $\log_{10}(\rho/\mathrm{g}\,\mathrm{cm}^{-3})$ from $-17$ to $-7$
+  \item Values stored as $\log_{10}(\kappa_P/\mathrm{cm}^2\,\mathrm{g}^{-1})$
+  \item 2D spline (or polynomial) interpolation in $(\log T, \log\rho)$
+\end{itemize}
+The Semenov Planck table covers dust + gas opacity and is appropriate for protoplanetary and cool disk conditions.
+
+\paragraph{Temperature $T > 10^4\,\mathrm{K}$:} Analytic formula (Kramers free-free + electron scattering).
+Above $10^4\,\mathrm{K}$, dust is destroyed and the opacity is dominated by free-free absorption and electron scattering. The Planck mean is computed as
+\begin{equation}
+  \kappa_P = \kappa_{\mathrm{ff}} + \kappa_{\mathrm{es}},
+  \label{eq:kappaP_split}
+\end{equation}
+where
+\begin{align}
+  \kappa_{\mathrm{ff}} &= 3.68\times 10^{22}\,g_{\mathrm{ff}}\,(1-Z)(1+X)\,\rho\,T^{-7/2},
+  \label{eq:kappa_ff} \\
+  \kappa_{\mathrm{es}} &= 0.2\,(1+X).
+  \label{eq:kappa_es}
+\end{align}
+Implemented parameters: $g_{\mathrm{ff}} = 1$, $X = 0.7$, $Z = 0.02$ (cosmic abundance); $\kappa_{\mathrm{es}} \approx 0.34\,\mathrm{cm}^2\,\mathrm{g}^{-1}$. The free-free opacity follows the Kramers approximation; units are CGS ($\rho$ in $\mathrm{g}\,\mathrm{cm}^{-3}$, $T$ in K, $\kappa_P$ in $\mathrm{cm}^2\,\mathrm{g}^{-1}$).
+
+\paragraph{Summary:}
+\begin{center}
+\begin{tabular}{ll}
+  \hline
+  $T \le 10^4\,\mathrm{K}$ & Semenov et al.\ (2003) table interpolation \\
+  $T > 10^4\,\mathrm{K}$   & $\kappa_P = \kappa_{\mathrm{ff}} + \kappa_{\mathrm{es}}$ (Eqs.\,\ref{eq:kappa_ff}--\ref{eq:kappa_es}) \\
+  \hline
+\end{tabular}
+\end{center}
+This choice is motivated by the fact that published Planck mean tables (e.g., Semenov) typically extend only to $T \sim 10^4\,\mathrm{K}$, while Be disks and inner CBD regions can reach slightly higher temperatures; the analytic extension ensures physically reasonable cooling in those regimes.
+
+\section{Optically Thin Irradiation (Chiang \& Goldreich Eq.\,12)}
+
+Chiang \& Goldreich (1997) derive three regimes for the incident stellar flux in optically thin surface layers (Eq.\,12a--c):
+\begin{itemize}
+  \item Regime (a): optically thin to stellar radiation; flux penetrates and heats the whole column.
+  \item Regime (b): intermediate; partial absorption.
+  \item Regime (c): optically thick to stellar radiation; absorption at surface (standard treatment).
+\end{itemize}
+The current code applies the same $Q_{\mathrm{irr}}$ profile (LOH24 + finite-star correction) to both optically thick and thin cells. This corresponds to a single effective regime (c-like for thick, and an approximation for thin). For outer disk regions where $\tau_R < 1$ but stellar irradiation is still absorbed, the adopted $Q_{\mathrm{irr}}$ remains a reasonable approximation; true limb-to-limb optically thin irradiation would require a regime-dependent treatment per Chiang \& Goldreich Eq.\,12a--c.
+
+\section{Summary by Case}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{l|l|l}
+  \hline
+  & CBD & Be Disk \\
+  \hline
+  $L_{\mathrm{irr}}$ & $L_{\mathrm{acc}}$ (optionally delayed) & $L_{\star}$ \\
+  Finite star & Optional ($\alpha_{\mathrm{star}}$) & Recommended ($\alpha_{\mathrm{star}}$) \\
+  $Q_{\mathrm{irr}}$ & LOH24 Eq.\,16 + Eq.\,(\ref{eq:alpha_total}) & Same \\
+  Optically thick $Q_{\mathrm{rad}}$ & Eq.\,(\ref{eq:Qrad_thick}), $\kappa_R$ & Same \\
+  Optically thin $Q_{\mathrm{rad}}$ & Eq.\,(\ref{eq:Qrad_thin}), $\kappa_P$ & Same \\
+  \hline
+\end{tabular}
+\caption{Irradiation and cooling treatments by disk type.}
+\end{table}
+
+\section{Implementation Guide}
+
+This section provides code file paths and input parameters for readers who wish to locate or modify the implementation.
+
+\subsection{Code Files}
+
+\begin{center}
+\begin{tabular}{ll}
+  \hline
+  File & Role \\
+  \hline
+  \texttt{irradiation\_mod.f90} & $Q_{\mathrm{irr}}$ (LOH24 Eq.\,16), finite-star correction, \\
+  & $L_{\mathrm{irr}}$ from accretion or $L_{\star}$, irradiation delay buffer \\
+  \texttt{disk\_thermal\_mod.f90} & Thermal balance: \texttt{heating\_cooling\_cell}, \\
+  & $Q_{\mathrm{vis}}$, $Q_{\mathrm{rad}}$ (thick/thin bridging), $\kappa_R$, $\kappa_P$ usage \\
+  \texttt{opacity\_table\_mod.f90} & \texttt{get\_opacity\_Planck\_rhoT}, Semenov Planck table, \\
+  & Kramers+$\kappa_{\mathrm{es}}$ for $T > 10^4\,\mathrm{K}$ \\
+  \texttt{disk\_energy\_mod.f90} & Thermal solver, iteration over $T_{\mathrm{mid}}$ and $Q_{\mathrm{irr}}$ \\
+  \texttt{output\_mod.f90} & Disk structure output, $Q_{\mathrm{rad}}$ for diagnostics \\
+  \texttt{mod\_global.f90} & Global flags: \texttt{use\_irradiation}, \texttt{use\_be\_decretion}, etc. \\
+  \texttt{setup.f90} & Namelist input (\texttt{/disk\_mode/}) \\
+  \hline
+\end{tabular}
+\end{center}
+
+\subsection{Key Input Parameters}
+
+Namelist \texttt{/disk\_mode/} (in \texttt{ad1d.in} or equivalent):
+\begin{center}
+\begin{tabular}{llp{7cm}}
+  \hline
+  Parameter & Default & Description \\
+  \hline
+  \texttt{use\_irradiation} & \texttt{.false.} & Enable irradiation heating \\
+  \texttt{use\_be\_decretion} & \texttt{.false.} & Be disk mode; $L_{\mathrm{irr}} = L_{\star}$, no delay \\
+  \texttt{use\_irradiation\_delay} & \texttt{.false.} & Delay $L_{\mathrm{irr}}$ by $\tau$ (CBD accretion) \\
+  \texttt{use\_finite\_irradiation\_source} & \texttt{.false.} & Add $\alpha_{\mathrm{star}}$ (Eq.\,\ref{eq:alpha_star}) \\
+  \texttt{tau\_irr\_lag\_mode} & \texttt{'explicit'} & \texttt{'explicit'}: fixed $\tau$; \texttt{'viscous'}: $\tau \propto r_{\mathrm{in}}^2/\nu_{\mathrm{in}}$ \\
+  \texttt{tau\_irr\_lag\_nd} & 0 & \texttt{explicit}: delay in units of $t_0$; \texttt{viscous}: prefactor \\
+  \hline
+\end{tabular}
+\end{center}
+
+Related parameters (in \texttt{/star\_params/}, \texttt{/scale\_params/}, or elsewhere): \texttt{R\_star}, \texttt{L\_star}, \texttt{q} (mass ratio), \texttt{f\_edd\_cap} (cap $L_{\mathrm{acc}}/L_{\mathrm{Edd}}$). Albedo is hardcoded in \texttt{irradiation\_mod.f90} (\texttt{albedo = 0.9}).
+
+\section{References}
+
+\begin{enumerate}
+  \item Chiang, E.\,I., \& Goldreich, P.\,1997, ApJ, 490, 368\\
+  ``Spectral Energy Distributions of T Tauri Stars with Passive Circumstellar Disks''
+  \item D'Alessio, P., Canto, J., Calvet, N., \& Lizano, S.\,1998, ApJ, 500, 411\\
+  ``Accretion Disks around Young Objects. I.''
+  \item Kato, S., Fukue, J., \& Mineshige, S.\,2008, {\it Black-Hole Accretion Disks}\\
+  Kyoto University Press
+  \item Lee, Y., Okazaki, A.\,T., \& Hayasaki, K.\,2024, ApJ, 975, 65 (LOH24)\\
+  ``Circumbinary disk spectra irradiated by two central accretion disks in a binary black hole system''
+  \item Semenov, D., Henning, T., Helling, C., Ilgner, M., \& Sedlmayr, E.\,2003, A\&A, 410, 611\\
+  ``Rosseland and Planck mean opacities for protoplanetary discs''
+\end{enumerate}
+
+\end{document}

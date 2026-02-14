@@ -1,0 +1,145 @@
+#============================================================
+# run_summary.txt (auto-generated)
+#============================================================
+
+[RUN MODE]
+do_restart = F
+it_restart =            1
+
+#------------------------------------------------------------
+# INPUT FILE (verbatim copy)
+#------------------------------------------------------------
+&disk_grid
+  nr      = 301
+  rin_value  = 1.0
+  rout_value = 100.0
+  r_unit     = 'dimless'
+/
+
+&disk_time
+  alpha_scheme = 1.0
+  t_sim_start = 0.0
+  t_sim_end   = 1.0e5
+/
+
+&disk_init
+  fwhm   = 0.2
+  sigma_init = 1.0
+/
+
+&disk_visc
+  delta   = 0.0
+  alphaSS = 0.3
+  hr0     = 0.01
+/
+
+&disk_mode
+  use_energy_balance = .true.
+  use_be_decretion   = .true.
+  use_irradiation    = .true.
+  use_finite_irradiation_source = .true.  ! Chiang&Goldreich stellar disk correction
+  inner_bc_type      = 0       ! 0: no torque, 1: open boundary, 2: zero inward flux
+  outer_bc_type      = 0       ! 0: open boundary, 1: no outflow, 2: zero flux
+  p_nu_isothermal    = 1.5
+/
+
+&star_params
+  model_type    = 'star'    ! 'star' or 'bh'
+  M_star_msun   = 19.0      ! stellar mass in Msun
+  R_star_rsun   = 8.0       ! stellar radius in Rsun
+  Teff_star_in  = 26000.0   ! effective temperature [K]
+  q             = 0.0       ! binary mass ratio (used only if model-type = 'bh')
+/
+
+&scale_params
+  r0_mode       = 'star'    ! 'star', 'rg', or 'explicit'
+  r0_over_Rstar = 1.0       ! R0 = r0_over_Rstar * R_star  if r0_mode='star'
+  r0_over_Rg    = 2.0e3     ! R0 = r0_over_Rg * R_g        if r0_mode='rg'
+  R0_input      = 0.0       ! R0 in [cm] if r0_mode='explicit'
+/
+
+&inflow
+  use_inflow   = .true.
+  mdot_inj_edd = 10.0
+  rinj_min     = 1.0
+  rinj_max     = 1.02
+  t_in_start   = 0.0
+  t_in_end     = 1.0e99
+/
+
+&wind_params
+   use_wind_truncation  = .true.
+   mdot_w_msunyr   = 6.0e-10
+   vinf_w          = 2.5e8
+   beta_w          = 1.0
+   f_rho_wind      = 1.0
+/
+
+#------------------------------------------------------------
+# RUN CONTROL (verbatim copy, if exists)
+#------------------------------------------------------------
+&run_control
+  do_restart = .false.
+  it_restart = 1
+  chk_file   = 'checkpoint.bin'
+  ! outfreq: disk_t*.dat for animation - keep frequent (default: nt/1000)
+  outfreq    = 0
+  ! chkfreq: checkpoint - at least 10 times (default: nt/10)
+  chkfreq    = 0
+  ! thermal_stability_freq: thermal stability output - at least 10 times (default: nt/10)
+  thermal_stability_freq = 0
+  do_thermal_stability_output = .true.
+  do_thermal_stability_all_roots = .false.
+/
+
+#------------------------------------------------------------
+# DERIVED / RUNTIME VALUES (selected)
+#------------------------------------------------------------
+t_sim_start        =   0.000000000000E+00
+t_sim_end          =   1.000000000000E+05
+t_sim_end_eff      =   9.999500000000E+04
+dt (dimensionless) =   5.000000000000E+00
+nt                 =        20000
+alpha (theta)      =   1.000000000000E+00
+t_nd (current)     =   0.000000000000E+00
+--- disk_mode ---
+use_energy_balance = T
+use_be_decretion   = T
+use_irradiation    = T
+inner_bc_type      =            0
+outer_bc_type      =            0
+p_nu_isothermal    =   1.500000000000E+00
+--- star / scale ---
+M_star [g]         =   3.778093000000E+34
+R_star [cm]        =   5.565600000000E+11
+Teff_star [K]      =   2.600000000000E+04
+q                  =   0.000000000000E+00
+R0 [cm]            =   5.565600000000E+11
+L_star [erg/s]     =   1.008651021010E+38
+L_irr  [erg/s]     =   0.000000000000E+00
+eta_acc            =   1.666666666667E-01
+f_edd_cap          =   0.000000000000E+00
+--- viscosity / init ---
+delta              =   0.000000000000E+00
+alphaSS            =   3.000000000000E-01
+hr0                =   1.000000000000E-02
+nu0_nd             =   2.000000000000E-05
+nu0_dim            =   7.492472795473E+14
+fwhm               =   2.000000000000E-01
+sigma_init         =   8.298382189384E-02
+--- inflow ---
+use_inflow         = T
+mdot_inj_edd       =   1.000000000000E+01
+mdot_inj_phys [g/s]=   3.108770140020E+19
+mdot_inj_msunyr    =   4.933709061273E-07
+mdot_inj_nd        =   1.000000000000E+01
+rinj_min           =   1.000000000000E+00
+rinj_max           =   1.020000000000E+00
+t_in_start         =   0.000000000000E+00
+t_in_end           =   1.000000000000E+99
+--- wind ---
+use_wind_truncation= T
+mdot_w_msunyr      =   6.000000000000E-10
+vinf_w [cm/s]      =   2.500000000000E+08
+beta_w             =   1.000000000000E+00
+f_rho_wind         =   1.000000000000E+00

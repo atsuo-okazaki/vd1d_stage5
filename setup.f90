@@ -14,11 +14,12 @@ module setup_mod
        fwhm, sigma_init, delta, alphaSS, hr0, nu0_nd, nu0_dim, &
        init_units, allocate_global, alloc_cur_state, print_global_info, &
        use_energy_balance, use_energy_pde, use_be_decretion, use_irradiation, &
-       inner_bc_type, outer_bc_type, mdot_inj_nd, mdot_inj_phys, &
+       use_irradiation_delay, use_finite_irradiation_source, inner_bc_type, outer_bc_type, &
+       mdot_inj_nd, mdot_inj_phys, &
        mdot_inj_edd, mdot_inj_msunyr, eta_acc, f_edd_cap, &
        kappa_es, t0, p_nu_isothermal, rho_cut, r_edge, i_edge, &
        use_wind_truncation, mdot_w_msunyr, vinf_w, beta_w, f_rho_wind, &
-       tau_irr_lag_nd
+       tau_irr_lag_mode, tau_irr_lag_nd
   use star_params_mod, only : &
        model_type, M_star_msun, R_star_rsun, Teff_star_in, &
        r0_mode, r0_over_Rstar, r0_over_Rg, R0_input,      &
@@ -69,8 +70,9 @@ contains
     namelist /disk_init/ fwhm, sigma_init
     namelist /disk_visc/ delta, alphaSS, hr0
     namelist /disk_mode/ use_energy_balance, use_energy_pde, use_be_decretion, &
-                     use_irradiation, inner_bc_type, outer_bc_type, &
-                     p_nu_isothermal, tau_irr_lag_nd
+                     use_irradiation, use_irradiation_delay, use_finite_irradiation_source, &
+                     inner_bc_type, outer_bc_type, &
+                     p_nu_isothermal, tau_irr_lag_mode, tau_irr_lag_nd
     namelist /star_params/ model_type, M_star_msun, R_star_rsun, Teff_star_in, q
     namelist /scale_params/ r0_mode, r0_over_Rstar, r0_over_Rg, R0_input
     namelist /inflow/ use_inflow, mdot_inj_edd, rinj_min, rinj_max, &
@@ -101,6 +103,8 @@ contains
     use_energy_balance = .true.
     use_be_decretion   = .false.
     use_irradiation    = .false.
+    use_irradiation_delay = .false.
+    use_finite_irradiation_source = .false.
     inner_bc_type      = 0
     outer_bc_type      = 0
     p_nu_isothermal    = 1.5_dp
@@ -120,7 +124,8 @@ contains
     beta_w        = 1.0_dp
     f_rho_wind    = 1.0_dp
 
-    tau_irr_lag_nd = 0.0_dp   ! default: no lag
+    tau_irr_lag_mode = 'explicit'
+    tau_irr_lag_nd   = 0.0_dp   ! explicit: delay [t/t0]; viscous: f_delay for t_visc
 
     call set_default_star_params()
 
@@ -333,11 +338,12 @@ contains
   subroutine init_initial_conditions()
     use kind_params, only : dp, i4b
     use constants,   only : pi
-    use mod_global,  only : nr, nt, r, sigmat, t_nd, t_sim_start, &
+    use mod_global,  only : nr, nt, r, sigmat, nu, Tmid, t_nd, t_sim_start, &
                             use_inflow, use_be_decretion, fwhm, sigma_init
     implicit none
 
     integer(i4b) :: i
+    real(dp) :: sigma_tmp(nr)
     real(dp), parameter :: ln2  = 0.6931471805599453_dp
     real(dp), parameter :: tiny = 1.0e-30_dp
 
@@ -361,7 +367,8 @@ contains
     Tmid(1,:) = 0.0_dp   ! or Teff_star, or a power-law seed
     !nu_tmp(:) = nu(:)   ! local array if needed; or just reuse nu(:)
 
-    call rebuild_structure_from_current_T(1, sigmat(1,:), nu(:))
+    sigma_tmp(:) = sigmat(1,:)
+    call rebuild_structure_from_current_T(1, sigma_tmp, nu)
 
     t_nd = t_sim_start
 

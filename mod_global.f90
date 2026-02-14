@@ -143,6 +143,8 @@ module mod_global
   logical :: use_be_decretion    = .false. ! .true.: Be decretion disk BC
   logical :: use_wind_truncation = .false. ! .true.: wind-driven ablation
   logical :: use_irradiation     = .false. ! .true.: irradiation heating
+  logical :: use_irradiation_delay = .false. ! .true.: delay L_irr by tau_irr_lag (accretion history)
+  logical :: use_finite_irradiation_source = .false. ! .true.: multiply Qirr by (2/pi)*arctan(R_star/r)
 
   !---------------------------------------------------------
   ! Energy PDE switch (MVP): evolve Tmid by BE ODE per radius
@@ -151,8 +153,10 @@ module mod_global
 
   !---------------------------------------------------------
   ! Irradiation delay (for inner-edge Mdot-proportional component)
-  !   tau_irr_lag_nd : delay time in dimensionless units (t/t0)
+  !   tau_irr_lag_mode : 'explicit' = fixed delay, 'viscous' = t_visc at inner edge
+  !   tau_irr_lag_nd   : explicit: delay in t/t0; viscous: prefactor for t_visc
   !---------------------------------------------------------
+  character(len=16) :: tau_irr_lag_mode = 'explicit'
   real(dp) :: tau_irr_lag_nd = 0.0_dp
 
   !---------------------------------------------------------

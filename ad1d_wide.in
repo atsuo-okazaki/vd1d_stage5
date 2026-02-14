@@ -1,0 +1,67 @@
+&disk_grid
+  nr         = 401
+  rin_value  = 1.0
+  rout_value = 1000.0
+  r_unit     = 'dimless'
+/
+! 10x radial range (r=1..1000). Log grid keeps similar resolution per decade.
+! nr=401 gives ~same zones/decade as nr=301 for 1..100.
+
+&disk_time
+  alpha_scheme = 1.0
+  t_sim_start  = 0.0
+  t_sim_end    = 3.0e7
+/
+
+&disk_init
+  fwhm   = 0.2
+  sigma_init = 1.0
+/
+
+&disk_visc
+  delta   = 0.0
+  alphaSS = 0.1
+  hr0     = 0.01
+/
+
+&disk_mode
+  use_energy_balance = .true.
+  use_energy_pde     = .true.
+  Use_be_decretion   = .false.
+  use_irradiation    = .true.
+  inner_bc_type      = 0
+  outer_bc_type      = 2
+  p_nu_isothermal    = 1.5
+/
+
+&star_params
+  model_type    = 'bh'
+  M_star_msun   = 100.0
+  R_star_rsun   = 0.0
+  Teff_star_in  = 0.0
+  q             = 1.0
+/
+
+&Scale_params
+  r0_mode       = 'rg'
+  r0_over_Rstar = 1.0
+  r0_over_Rg    = 2.0e3
+  R0_input      = 0.0
+/
+
+&inflow
+  use_inflow   = .true.
+  mdot_inj_edd = 1.0
+  rinj_min     = 990.0
+  rinj_max     = 1000.0
+  t_in_start   = 0.0
+  t_in_end     = 1.0e99
+/
+
+&wind_params
+  use_wind_truncation  = .false.
+  mdot_w_msunyr   = 6.0e-10
+  vinf_w          = 2.5e8
+  beta_w          = 1.0
+  f_rho_wind      = 1.0
+/

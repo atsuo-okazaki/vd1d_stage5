@@ -7,6 +7,7 @@ module evolve_try_mod
   !! - Only after acceptance, we commit everything to mod_global(it+1,:) and nu(:).
   !!
   use kind_params, only : dp, i4b
+  use run_control_mod, only : iprint_irr
   use mod_global,  only : nr, t0, Tmid, sigmat, nu, &
                           Tmid, H, rho, kappaR, tauR, Qvis, Qirr, dYdXi, Qrad, &
                           use_be_decretion, use_irradiation, is_shadow
@@ -185,16 +186,23 @@ end function evolve_try_to_target
     integer(i4b), parameter :: mmax_irr = 6
     real(dp),     parameter :: eps_rQ   = 1.0e-2_dp
     real(dp), parameter :: Qfloor = 1.0e-40_dp   ! or 1e-60; choose safely above underflow
+    !--------- iteration parameters: 
+    !  The follwoing set is well tuned. Don't chenge them carelessly.
     real(dp),     parameter :: w_init_irr = 0.7_dp
-    real(dp),     parameter :: w_min_irr  = 0.05_dp
-    real(dp),     parameter :: w_shrink_irr = 0.5_dp
-    real(dp),     parameter :: grow_tol_irr = 1.05_dp
-    real(dp),     parameter :: worsen_tol = 1.01_dp  ! treat as worsen if rQ > 1.01*rQ_last
+    real(dp),     parameter :: w_min_irr  = 0.1_dp
+    real(dp),     parameter :: w_shrink_irr = 0.7_dp
+    real(dp),     parameter :: grow_tol_irr = 1.2_dp
+    real(dp),     parameter :: worsen_tol = 1.05_dp  ! treat as worsen if rQ > 1.01*rQ_last
+    real(dp),     parameter :: improve_tol_irr = 0.9_dp
+    !---------
     integer(i4b), parameter :: n_retry_max = 3       ! backtrack attempts per m_irr
     integer(i4b), parameter :: blow_max_irr = 3
     real(dp) :: rQ_last, qref
     real(dp) :: last_disp
+    real(dp) :: dQ_max
     integer(i4b) :: n_retry
+    integer(i4b) :: n_flip, i_max
+    integer(i4b) :: n_used
     logical :: has_prev
 
     ! shadow hysteresis parameters (same as substep_try_and_commit)
@@ -202,9 +210,9 @@ end function evolve_try_to_target
     real(dp),     parameter :: eps_off = 1.5e-3_dp
 
     ! Optional: "soft shadow" (more physical: finite source + scattering)
-    logical,      parameter :: use_soft_shadow = .false.
-    real(dp),     parameter :: soft_f_mid = 1.0_dp - 0.5_dp*(eps_on + eps_off)
-    real(dp),     parameter :: soft_df    = 0.5_dp*(eps_on - eps_off)   ! transition width
+    logical, save :: use_soft_shadow = .true.
+    real(dp), save :: shadow_soft_delta = 0.1_dp   ! parameter for shadow softening
+    real(dp) :: fenv, delta, s, delta_soft
 
     real(dp) :: Qirr_calc(nr), Qirr_raw(nr), Y_prof(nr), dYdXi_calc(nr)
     logical  :: shadow_new(nr)
@@ -261,6 +269,7 @@ end function evolve_try_to_target
           !---------------------------------------------
           dt_phys = dt_loc * t0
 
+!$omp parallel do default(shared) private(i)
           do i = 1, nr
              r_cgs(i)     = r_dim(r(i))
              Sigma_cgs(i) = sigma_dim(sigma_commit(i))
@@ -270,6 +279,7 @@ end function evolve_try_to_target
                 OmegaK_cgs(i) = 0.0_dp
              end if
           end do
+!$omp end parallel do
 
           !---------------------------------------------
           ! Irradiation / shadow + self-consistent fixed-point iteration
@@ -333,41 +343,58 @@ end function evolve_try_to_target
                 !     fix_Qirr_negative_spikes -> hard mask Qirr_calc=0 in shadow)
                 !------------------------------------------------------
                 ! Recompute shadow(H_out) using the SAME hysteresis logic
+!$omp parallel do default(shared) private(i)
                 do i = 1, nr
                    hoverr_raw(i) = H_out(i) / max(r_cgs(i), 1.0e-99_dp)
                 end do
-                call smooth_profile_logr(n=nr, r_cgs=r_cgs, y_in=hoverr_raw, halfwin=5, y_out=hoverr_sm)
+!$omp end parallel do
+                call smooth_profile_logr(n=nr, r_cgs=r_cgs, y_in=hoverr_raw, &
+                                         halfwin=7, y_out=hoverr_sm)
+!$omp parallel do default(shared) private(i)
                 do i = 1, nr
                    Hshadow_cgs(i) = hoverr_sm(i) * r_cgs(i)
                 end do
-                call compute_shadow_loggrid_hyst(nr, r_cgs, Hshadow_cgs, halfwin=5, &
+!$omp end parallel do
+                call compute_shadow_loggrid_hyst(nr, r_cgs, Hshadow_cgs, halfwin=7, &
                      eps_on=eps_on, eps_off=eps_off, shadow=shadow_new)
 
-                ! Recompute Qirr(H_out) using LOH24 Eq.(16) wrapper
-                call build_Qirr_profile_eq16_with_raw(nr, r_cgs, H_out, Qirr_raw, Qirr_calc, &
+                ! Recompute Qirr using smoothed H (Hshadow_cgs) to suppress numerical oscillations
+                call build_Qirr_profile_eq16_with_raw(nr, r_cgs, Hshadow_cgs, Qirr_raw, Qirr_calc, &
                      dYdXi_calc, Y_prof)
 
                 call fix_Qirr_negative_spikes(n=nr, r_cgs=r_cgs, shadow=shadow_new, &
                      Qirr_raw=Qirr_raw, Qirr_prof=Qirr_calc, &
                      max_run=3, Qirr_floor_abs=0.0_dp, use_log_r=.true.)
 
-                !if (use_soft_shadow) then
-                !   ! Soft transition around the shadow boundary (more physical, smoother Jacobian)
-                !   do i = 1, nr
-                !      ! f = (H/r)_sm / envelope is hidden inside compute_shadow_loggrid_hyst,
-                !      ! so here we approximate smoothing by using the local hoverr_sm ratio to max so far.
-                !      ! For a stricter implementation, you can re-evaluate the envelope and f(i) explicitly.
-                !      ! Simple robust option: keep hard shadow as default (use_soft_shadow=.false.).
-                !      if (shadow_new(i)) then
-                !         Qirr_calc(i) = 0.0_dp ! This is still a hard mask. Change it later!
-                !      end if
-                !   end do
-                !else
+                if (use_soft_shadow) then
+                   ! ---------------------------------------------------------
+                   ! Soft shadowing (Option B):
+                   !   f(i)     = (H/r)_raw  (already computed as hoverr_raw)
+                   !   f_env(i) = max_{j<i} f(j)  (inner "horizon" envelope)
+                   !   Delta    = f_env - f
+                   !   s(i)     = 0.5*(1+tanh(Delta/delta_soft*f_env(i))) in [0,1]
+                   !   Qirr_soft = (1-s) * Qirr_calc
+                   ! ---------------------------------------------------------
+                   delta_soft = shadow_soft_delta   ! user parameter (recommended ~ 0.1*eps_on)
+                   do i = 1, nr
+                      if (i == 1) then
+                         !fenv = hoverr_raw(1)
+                         fenv = hoverr_sm(1)
+                      else
+                         !fenv = max(fenv, hoverr_raw(i-1))
+                         fenv = max(fenv, hoverr_sm(i-1))
+                      end if
+                      !delta = fenv - hoverr_raw(i)
+                      delta = fenv - hoverr_sm(i)
+                      s = 0.5_dp*(1.0_dp + tanh(delta/max(delta_soft*fenv,1.0e-99_dp)))
+                      Qirr_calc(i) = (1.0_dp - s) * Qirr_calc(i)
+                   end do
+                else
                    ! Hard mask (your current model)
                    where (shadow_new)
                       Qirr_calc = 0.0_dp
                    end where
-                !end if
+                end if
 
                 ! ------------------------------------------------------
                 ! Guard: irradiation effectively zero -> skip residual loop & accept
@@ -375,9 +402,33 @@ end function evolve_try_to_target
                 ! ------------------------------------------------------
                 maxQcalc = maxval(abs(Qirr_calc))
                 maxQprof = maxval(abs(Qirr_prof))
-                write (*, '("m_irr =", i2, ", Number of shadowed grids =", i4, &
-                      ", max(|Qirr_calc|)/max(|Qirr_prof|) =", 1pe12.4)') m_irr, &
-                      count(shadow_new), maxQcalc/maxQprof
+                if (iprint_irr >= 1) then
+                   write (*, '("m_irr =", i2, ", Number of shadowed grids =", i4, &
+                         ", max(|Qirr_calc|)/max(|Qirr_prof|) =", 1pe12.4)') m_irr, &
+                         count(shadow_new), maxQcalc/maxQprof
+                   if (maxQcalc < Qfloor .and. maxQprof > 1.0e2_dp*Qfloor) then
+                      write(*,'(A,1PE11.3,A,1PE11.3)') &
+                           'WARNING: Qcalc~0 but Qprof nonzero: ', maxQcalc, ' ', maxQprof
+                   end if
+                end if
+
+                ! --- diagnostics: shadow flips and max |dQ| location ---
+                n_flip = count( shadow_new .neqv. shadow_try )
+
+                ! Compute max |Qirr_calc - Qirr_prof| and its index
+                i_max  = maxloc( abs(Qirr_calc(:) - Qirr_prof(:)), dim=1 )
+                dQ_max = abs(Qirr_calc(i_max) - Qirr_prof(i_max))
+
+                if (iprint_irr >= 1) then
+                   write(*,'(A,I6,A,1PE11.3,A,I6)') &
+                        'shadow flips = ', n_flip, '  max|dQ| = ', dQ_max, '  at i = ', i_max
+                   write(*,'(A,1PE11.3,A,1PE11.3)') &
+                        'r(i_max) = ', r_cgs(i_max), '  H(i_max) = ', H_out(i_max)
+                end if
+
+                n_used = count( Sigma_cgs > 1e-8_dp .and. &
+                            .not.(abs(Qirr_prof) < Qfloor .and. abs(Qirr_calc) < Qfloor) )
+                if (iprint_irr >= 1) write(*,'(A,I8)') 'n_used_cells_for_rQ = ', n_used
 
                 if (maxQcalc < Qfloor .and. maxQprof < Qfloor) then
                    rQ = 0.0_dp
@@ -387,7 +438,7 @@ end function evolve_try_to_target
                    dYdXi_out(:)  = 0.0_dp
                    Qirr_prof(:)  = 0.0_dp
 
-                   ! warm-start bufferもゼロで更新（次 timestep も安定）
+                   ! update warm-start buffer with zeroes
                    call ensure_ws_alloc(nr)
                    Qirr_ws(:)   = 0.0_dp
                    dYdXi_ws(:)  = 0.0_dp
@@ -432,16 +483,18 @@ end function evolve_try_to_target
                    end if
                 end if
 
-                write(*,'(A,1PE11.3,A,1PE11.3)') 'maxQprof =',maxval(abs(Qirr_prof)), &
-                        '  maxQcalc =',maxval(abs(Qirr_calc))
-                ! Display-friendly "last": avoid printing HUGE() before the first accepted iteration
-                if (has_prev) then
-                   last_disp = rQ_last
-                else
-                   last_disp = 0.0_dp
+                if (iprint_irr >= 1) then
+                   write(*,'(A,1PE11.3,A,1PE11.3)') 'maxQprof =',maxval(abs(Qirr_prof)), &
+                           '  maxQcalc =',maxval(abs(Qirr_calc))
+                   ! Display-friendly "last": avoid printing HUGE() before the first accepted iteration
+                   if (has_prev) then
+                      last_disp = rQ_last
+                   else
+                      last_disp = 0.0_dp
+                   end if
+                   write(*,'(A,I3,A,1PE11.4,A,1PE11.4,A,1PE11.4)') &
+                        'm_irr =', m_irr, ': rQ =', rQ, '  w =', wloc_irr, '  last =', last_disp
                 end if
-                write(*,'(A,I3,A,1PE11.4,A,1PE11.4,A,1PE11.4)') &
-                     'm_irr =', m_irr, ': rQ =', rQ, '  w =', wloc_irr, '  last =', last_disp
 
                 ! 4) Converged?
                 if (rQ < eps_rQ) then
@@ -488,6 +541,13 @@ end function evolve_try_to_target
                 dYdXi_ws(:)  = dYdXi_out(:)
                 shadow_ws(:) = shadow_try(:)
                 ws_valid     = .true.
+
+                ! (optional) grow w if we improved clearly
+                if (has_prev) then
+                   if (rQ < improve_tol_irr * rQ_last) then
+                      wloc_irr = min(w_init_irr, wloc_irr * grow_tol_irr)
+                   end if
+                end if
 
                 ! Update "previous" only after accepting the step
                 rQ_last = rQ
@@ -561,6 +621,7 @@ end function evolve_try_to_target
              !----------------------------------------------------
              ! (2) Under-relaxation in log(T) and linear nu
              !----------------------------------------------------
+!$omp parallel do default(shared) private(i)
              do i = 1, nr
                 if (T_prev(i) > 0.0_dp .and. T_trial(i) > 0.0_dp) then
                    T_relaxed(i) = exp((1.0_dp-omega_T)*log(T_prev(i)) &
@@ -570,6 +631,7 @@ end function evolve_try_to_target
                 end if
                 nu_relaxed(i) = (1.0_dp-omega_nu)*nu_new(i) + omega_nu*nu_trial(i)
              end do
+!$omp end parallel do
 
              !----------------------------------------------------
              ! (3) Diffuse Sigma again with relaxed nu
@@ -585,24 +647,30 @@ end function evolve_try_to_target
              err_dQ = 0.0_dp; dQ2  = 0.0_dp
              resT_max = 0.0_dp; resnu_max = 0.0_dp
              i_maxresT = 1; i_maxresnu = 1
+!$omp parallel do default(shared) private(i, resT, resnu) &
+!$omp& reduction(+:err_sig, sig2, err_T, T2, err_nu, nu2, err_dQ, dQ2)
              do i = 1, nr
                 if (tau_trial(i) > 1.0_dp) then
                    err_sig = err_sig + (sigma_new(i) - sigma_prev(i))**2
                    sig2    = sig2    + max(abs(sigma_prev(i)), tiny)**2
 
                    resT = T_relaxed(i) - T_prev(i)
+!$omp critical(upd_resT)
                    if (abs(resT) >= resT_max) then
                       i_maxresT = i
                       resT_max = resT
                    end if
+!$omp end critical(upd_resT)
                    err_T   = err_T   + resT*resT
                    T2      = T2      + max(abs(T_prev(i)), tiny)**2
 
                    resnu = nu_relaxed(i) - nu_new(i)
+!$omp critical(upd_resnu)
                    if (abs(resnu) >= resnu_max) then
                       i_maxresnu = i
                       resnu_max = resnu
                    end if
+!$omp end critical(upd_resnu)
                    err_nu  = err_nu  + resnu*resnu
                    nu2     = nu2     + max(abs(nu_new(i)), tiny)**2
 
@@ -610,6 +678,7 @@ end function evolve_try_to_target
                    dQ2     = dQ2    + max(Qvis_trial(i), Qirr_trial(i), Qrad_trial(i), tiny)**2
                 end if
              end do
+!$omp end parallel do
 
              err_sig = sqrt(err_sig / max(sig2, tiny))
              err_T   = sqrt(err_T   / max(T2,   tiny))
@@ -782,8 +851,8 @@ logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source
   logical, save :: dbg_first = .true.
   character(len=*), parameter :: dbgfile = 'diag_shadow_qirr.dat'
 
-  ! Work array: H in CGS for LOH24
-  real(dp) :: H_cgs(nr), r_cgs(nr)
+  ! Work array for LOH24 (r_cgs; H uses Hshadow_cgs from smoothed H/r)
+  real(dp) :: r_cgs(nr)
   real(dp) :: mdot_tmp
   integer(i4b) :: i
 
@@ -804,38 +873,40 @@ logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source
      !--------------------------------------------
      ! Shadowing at SUBSTEP START geometry (no delay)
      !--------------------------------------------
+!$omp parallel do default(shared) private(i)
      do i = 1, nr
         r_cgs(i) = r_dim(r(i)) 
      end do
+!$omp end parallel do
 
      ! Build a smoothed H/r ONLY for shadowing to suppress single-cell spikes.
+!$omp parallel do default(shared) private(i)
      do i = 1, nr
         hoverr_raw(i) = H_cur(i) / max(r_cgs(i), 1.0e-99_dp)   ! dimensionless
      end do
+!$omp end parallel do
 
-     call smooth_profile_logr(n=nr, r_cgs=r_cgs, y_in=hoverr_raw, halfwin=5, &
+     call smooth_profile_logr(n=nr, r_cgs=r_cgs, y_in=hoverr_raw, halfwin=7, &
                              y_out=hoverr_sm)
 
+!$omp parallel do default(shared) private(i)
      do i = 1, nr
         Hshadow_cgs(i) = hoverr_sm(i) * r_cgs(i)
      end do
+!$omp end parallel do
 
      !!call compute_shadow_from_HoverR(nr, r_cgs, Hshadow_cgs, shadow_prof)
      !call compute_shadow_loggrid_smooth(nr, r_cgs, Hshadow_cgs, halfwin=5, &
      !                                  eps_shadow=3.0e-3_dp, shadow=shadow_prof)
-     call compute_shadow_loggrid_hyst(nr, r_cgs, Hshadow_cgs, halfwin=5, &
+     call compute_shadow_loggrid_hyst(nr, r_cgs, Hshadow_cgs, halfwin=7, &
                                      eps_on=3.0e-3_dp, eps_off=1.5e-3_dp, &
                                      shadow=shadow_prof)
 
      ! Update L_irr and LOH24 parameters using CURRENT state (cur arrays)
      call set_irradiation_luminosity_from_arrays(t_nd_now=t_local, sigma_nd=sigma_cur, nu_nd=nu_cur, do_push=.false.)
 
-     ! Build Qirr(r) using CURRENT geometry (H_cur) at substep start
-     do i = 1, nr
-        H_cgs(i) = H_cur(i)   ! ensure CGS conversion if needed
-     end do
-
-     call build_Qirr_profile_eq16_with_raw(nr, r_cgs, H_cgs, Qirr_raw, Qirr_prof, &
+     ! Build Qirr(r) using SMOOTHED H (Hshadow_cgs) at substep start to suppress numerical oscillations
+     call build_Qirr_profile_eq16_with_raw(nr, r_cgs, Hshadow_cgs, Qirr_raw, Qirr_prof, &
                                           dYdXi_prof, Y_prof)
 
      ! Post-process: fill short negative spikes instead of hard zeroing
@@ -918,14 +989,17 @@ subroutine smooth_profile_logr(n, r_cgs, y_in, halfwin, y_out)
   ! 3-point median prefilter
   y_med(:) = y_in(:)
   if (n >= 3) then
+!$omp parallel do default(shared) private(i)
      do i = 2, n-1
         y_med(i) = median3(y_in(i-1), y_in(i), y_in(i+1))
      end do
+!$omp end parallel do
      y_med(1) = y_in(1)
      y_med(n) = y_in(n)
   end if
 
   ! Moving average (index window; for log grid this is effectively log-r smoothing)
+!$omp parallel do default(shared) private(i, j, j1, j2, sumv, cnt)
   do i = 1, n
      j1 = max(1, i-halfwin)
      j2 = min(n, i+halfwin)
@@ -937,6 +1011,7 @@ subroutine smooth_profile_logr(n, r_cgs, y_in, halfwin, y_out)
      end do
      y_out(i) = sumv / max(1, cnt)
   end do
+!$omp end parallel do
 
 contains
   pure real(dp) function median3(a, b, c)

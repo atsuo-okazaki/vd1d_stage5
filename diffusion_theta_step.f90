@@ -19,9 +19,11 @@ subroutine diffusion_theta_step(nr, r, nu, Sigma_old, dt, theta, Sigma_new)
 
   call compute_LSigma(nr, r, nu, Sigma_old, L_old)
 
+!$omp parallel do default(shared) private(i)
   do i = 1, nr
      rhs(i) = Sigma_old(i) + dt*(1.0_dp - theta)*L_old(i)
   end do
+!$omp end parallel do
 
   ! Add theta contribution of constant inner flux if applicable
   if (inner_bc_type == INNER_FIXED_MDOT) then
