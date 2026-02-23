@@ -28,6 +28,7 @@
   Use_be_decretion   = .false.
   use_irradiation    = .true.
   use_irradiation_delay = .false.  ! .true.: L_irr from mdot(t - delay)
+  use_finite_irradiation_source = .false.  ! .true.: finite-disk correction
   inner_bc_type      = 0  ! 0: no torque, 1: open boundary, 2: zero inward flux
   outer_bc_type      = 2  ! 0: open boundary, 1: no outflow, 2: zero flux
   p_nu_isothermal    = 1.5

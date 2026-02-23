@@ -7,7 +7,7 @@ module output_mod
   use kind_params,  only : dp, i4b, lgt
   use constants,    only : pi, kb, mp, mu, msun, year, sbc
   use mod_global,   only : nr, r, nu, sigmat, Tmid,     &
-                           H, rho, kappaR, tauR, dt, fwhm,    &
+                           H, rho, kappaR, kappa_planck, tauR, dt, fwhm,    &
                            delta, alpha, kappa_es, kappa0, &
                            M_star, R_star, Teff_star, L_star, R0, &
                            t0, sigma_init, Temp0, dYdxi, &
@@ -21,8 +21,6 @@ module output_mod
   use setup_mod, only : model_type
   use units_disk_mod, only : t_dim, r_dim, sigma_dim, omegaK_dim
   use mdot_units_mod, only : mdot_edd_unit, mdot_pde_unit
-  use disk_thermal_mod, only : heating_cooling_cell, Qvis_and_Qrad
-  use opacity_table_mod, only : get_opacity_Planck_rhoT
 
 contains
 
@@ -298,72 +296,47 @@ contains
     
   end subroutine output_edge_radius
 
-  subroutine output_disk_structure_dtl(it, t)
+  subroutine output_disk_structure_dtl(it, t, rQ_rms, rQ_p95, rQ_max, &
+                                       rdt_max, rdt_rms, rdt_p95, &
+                                       qbal_max, qbal_p95)
     use mod_global, only : mdot_inner_phys
     use irradiation_mod, only : L_irr
     integer(i4b), intent(in) :: it
     real(dp),    intent(in)  :: t
+    real(dp),     intent(in) :: rQ_rms, rQ_p95, rQ_max
+    real(dp),     intent(in) :: rdt_max, rdt_rms, rdt_p95
+    real(dp),     intent(in) :: qbal_max, qbal_p95
 
     integer(i4b), save :: iu_st = -1
-    integer(i4b) :: i, ierr_planck
+    integer(i4b) :: i
     character(len=64) :: fname
+    real(dp) :: Qrad_cell(nr), Qvis_cell(nr), Qirr_cell(nr)
     real(dp) :: t_cgs, r_cgs, sigma_cgs, omegaK_cgs
     real(dp) :: nu_dim_loc, T_loc
-    real(dp) :: kappaR_loc, tauR_loc, kappaP_loc, Qvis_loc, Qrad_loc
-    real(dp) :: Tsurf
+    real(dp) :: kappaR_loc, tauR_loc, kappa_out, tau_out
+    real(dp) :: Qvis_out, Qrad_out
+    real(dp) :: T_emit
     real(dp) :: cs2
     real(dp), parameter :: tiny_sigma = 1.0e-8_dp
+
+    ! ---- SED cell work arrays (reused to avoid recomputation)
+    real(dp) :: Sigma_cgs_cell(nr), Tspec_cell(nr), kapP_cell(nr)
 
     t_cgs = t_dim(t)
     
     write(fname,'("disk_t",i8.8,".dat")') it
     open(newunit=iu_st, file=fname, status='replace')
 
-    if (k_iter(it) > 0) then
-       if (use_irradiation) then
-          if (m_iter(it) > 0) then
-             write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (converged after', k_iter(it), &
-                  ' iterations; consistent Tmid and Qirr after', &
-                  m_iter(it), ' iterations)'
-          else
-             write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (converged after', k_iter(it), &
-                  ' iterations; no consistent Tmid and Qirr)'
-          end if
-       else
-          write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-               ', t =', t_cgs, '[s] (converged after', k_iter(it), ' iterations)'
-       end if
-    else if (k_iter(it) == 0) then
-       if (use_irradiation) then
-          if (m_iter(it) > 0) then
-             write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (Consistent Tmid and Qirr after', &
-                  m_iter(it), ' iterations)'
-          else
-             write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (No consistent Tmid and Qirr)'
-          end if
-       else
-          write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-               ', t =', t_cgs, '[s]'
-       end if
-    else
-       if (use_irradiation) then
-          if (m_iter(it) > 0) then
-             write(iu_st,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, ' [s] (not converged; consistent Tmid and Qirr after', &
-                  m_iter(it), ' iterations)'
-          else
-             write(iu_st,'(a, i8, a, 1pe13.5, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (not converged; no consistent Tmid and Qirr)'
-          end if
-       else
-          write(iu_st,'(a, i8, a, 1pe13.5, a)') '# it =', it, &
-               ', t =', t_cgs, '[s] (not converged)'
-      end if
-    end if
+    write(iu_st,'(a, i8, a, 1pe13.5, a)') '# it =', it, ', t =', t_cgs, '[s]'
+    write(iu_st,'(A, 1pe12.4, A, 1pe12.4, A, 1pe12.4)') &
+        &  '# irr_fixedpoint_residual (full step aggregate): rms =', rQ_rms, &
+        &  '  p95 =', rQ_p95, '  max =', rQ_max
+    write(iu_st,'(A, 1pe12.4, A, 1pe12.4, A, 1pe12.4)') &
+        &  '# Time-integration residuals: rms =', rdt_rms, &
+        &  '  p95 =', rdt_p95, '  max =', rdt_max
+    write(iu_st,'(A, 1pe12.4, A, 1pe12.4)') &
+        &  '# Energy-balance residuals n time-integration eq.: p95 =', qbal_p95, &
+        &  '  max =', qbal_max
     if (model_type == 'star') then
        write (iu_st, '(a, 1pe13.5, a, 1pe13.5, a, 1pe13.5, a, 1pe13.5, a)') &
           '# M_star =', M_star, '[g], R_star =', R_star, &
@@ -374,12 +347,21 @@ contains
           '# M_star =', M_star, '[g], R0 =', R0, '[cm], Mdot(R0) =', &
           mdot_inner_phys, '[g/s], L_irr =', L_irr, '[erg/s]'
     end if
+    write(iu_st,'(a)') '# kappa: kappaR if tau>=1, kappaP if tau<1. tau: tauR if tau>=1, tauP if tau<1. T_emit: (Qrad/2sbc)^0.25 if tau>=1, Tmid if tau<1 (SED-ready)'
     write(iu_st,'(a, 2x, a, 6x, a, 4x, a, 4x, a, 7x, a, 7x, a, 4x, a, 2x, a, 6x, &
          & a, 9x, a, 9x, a, 8x, a, 5x, a, 3x, a, 3x, a)') '#', 'xi(=r/R0)', 'r(cm)', &
          & 'sigma(g/cm^2)', 'H(cm)', 'Y(=H/r)', 'dY/dxi', &
          & 'rho(g/cm^3)', 'nu(cm^2/s)', &
          & 'Qvis', 'Qirr', 'Qrad', 'Tmid(K)', &
-         & 'Tsurf(K)', 'kappaR(cm^2/g)', 'tauR'
+         & 'T_emit(K)', 'kappa(cm^2/g)', 'tau'
+
+    ! Initialization of SED cell work arrays
+    Sigma_cgs_cell(:) = 0.0_dp
+    Tspec_cell(:)     = 0.0_dp
+    kapP_cell(:)      = 0.0_dp
+    Qrad_cell(:) = 0.0_dp
+    Qvis_cell(:) = 0.0_dp
+    Qirr_cell(:) = 0.0_dp
 
     do i = 1, nr
        r_cgs    = r_dim(r(i))
@@ -400,197 +382,390 @@ contains
              kappaR(it, i) = 0.0_dp
              tauR(it, i)   = 0.0_dp
           
+             kappa_out = 0.0_dp
+             tau_out   = 0.0_dp
              write(iu_st,'(1p,15e13.5)') r(i), r_cgs, sigma_cgs, H(it,i), &
                   H(it,i)/r_cgs, 0.0_dp, rho(it,i), nu_dim_loc, &
                   0.0_dp, 0.0_dp, 0.0_dp, &  ! Qvis, Qirr, Qrad
-                  0.0_dp, 0.0_dp, 0.0_dp, &  ! Tmid, Tsurf, kappaR
-                  0.0_dp                     ! tauR
+                  0.0_dp, 0.0_dp, 0.0_dp, &  ! Tmid, T_emit, kappa
+                  0.0_dp                     ! tau
+
+             Sigma_cgs_cell(i) = 0.0_dp
+             kapP_cell(i)      = 0.0_dp
+             Tspec_cell(i)     = 0.0_dp
+             Qrad_cell(i)      = 0.0_dp
+             Qvis_cell(i)      = 0.0_dp
+             Qirr_cell(i)      = 0.0_dp
+             
              cycle
           end if
 
-          call get_opacity_Planck_rhoT(rho(it, i), T_loc, kappaP_loc, ierr_planck)
-          if (ierr_planck /= 0) kappaP_loc = kappaR_loc
-          call Qvis_and_Qrad(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                             kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc, kappaP_loc=kappaP_loc)
-   
-          !! Qrad_loc; radiative flux from both surfaces
-          !! Qrad_loc = 2 * sbc *Tsurf**4
-          Tsurf = (Qrad_loc / (2.0_dp * sbc))**0.25_dp
+          ! For SED: tau>=1 use kappaR/tauR (optically thick); tau<1 use kappaP/tauP (optically thin)
+          if (tauR_loc >= 1.0_dp) then
+             kappa_out = kappaR(it, i)
+             tau_out   = tauR(it, i)
+          else
+             kappa_out = kappa_planck(it, i)
+             tau_out   = 0.5_dp * kappa_planck(it, i) * Sigma_cgs
+          end if
+
+          ! Use saved Qvis/Qrad (consistent with thermal solver)
+          Qvis_out = Qvis(it, i)
+          Qrad_out = Qrad(it, i)
+          Qvis_cell(i) = Qvis_out
+          Qrad_cell(i) = Qrad_out
+          Qirr_cell(i) = Qirr(it, i)
+          ! For SED: tau>=1 use effective surface T from flux; tau<1 use Tmid (optically thin)
+          if (tauR_loc >= 1.0_dp) then
+             T_emit = (Qrad_out / (2.0_dp * sbc))**0.25_dp
+          else
+             T_emit = Tmid(it, i)
+          end if
+
+          ! ---- Cache SED inputs for reuse (cell-centered)
+          Sigma_cgs_cell(i) = Sigma_cgs
+          kapP_cell(i)      = kappa_planck(it, i)   ! absorption-only Planck mean assumed
+          Tspec_cell(i)     = T_emit                ! SED-ready temperature definition
+
        else
-          ! Isotherma-disk quantities
+          ! Isothermal-disk quantities (no thermal balance; Qvis/Qrad not defined)
+          Qvis_out = 0.0_dp
+          Qrad_out = 0.0_dp
           if (sigma_cgs <= tiny_sigma) then
              nu_conv(it, i) = nu(i)
              H(it, i)     = 0.0_dp
              rho(it, i)   = 0.0_dp
              Tmid(it, i)  = 0.0_dp
-             Tsurf        = 0.0_dp
+             T_emit       = 0.0_dp
+
+             Sigma_cgs_cell(i) = 0.0_dp
+             kapP_cell(i)      = 0.0_dp
+             Tspec_cell(i)     = 0.0_dp
+             Qrad_cell(i)      = 0.0_dp
+             Qvis_cell(i)      = 0.0_dp
+             Qirr_cell(i)      = 0.0_dp
           else
             nu_conv(it, i) = nu(i)
             cs2            = 1.5_dp * nu_dim_loc * omegaK_cgs / alphaSS
             H(it, i)       = sqrt(cs2) / omegaK_cgs
             rho(it, i)     = sigma_cgs / (2.0_dp * H(it, i))
             Tmid(it, i)    = mu * mp * cs2 / kb
-            Tsurf          = Tmid(it, i)
+            T_emit        = Tmid(it, i)
             !write (*, '(a, 1pe121.3, a, 1pe11.3, a, 1pe11.3, a, 1pe11.3)') &
             !   'cs2=', cs2, ', H=', H(it, i), ', rho=', rho(it, i), &
             !   ', Tmid=', Tmid(it, i)
           end if
-          Qvis_loc = 0.0_dp
-          Qrad_loc = 0.0_dp
           kappaR(it, i) = 0.0_dp
           tauR(it, i) = 0.0_dp
+          kappa_out = 0.0_dp
+          tau_out   = 0.0_dp
+
+          ! ---- Cache SED inputs for reuse (cell-centered)
+          Sigma_cgs_cell(i) = Sigma_cgs
+          kapP_cell(i)      = kappa_planck(it, i)   ! absorption-only Planck mean assumed
+          Tspec_cell(i)     = T_emit                ! SED-ready temperature definition
+          Qrad_cell(i) = Qrad(it, i)                ! Qrad from both faces (zero in this case)
+          Qvis_cell(i) = Qvis(it, i)
+          Qirr_cell(i) = Qirr(it, i)
        end if
  
        write(iu_st,'(1p,15e13.5)') r(i), r_cgs, sigma_cgs, H(it, i), &
              H(it, i)/r_cgs, dYdXi(it, i), rho(it, i), &
              nu_conv(it, i) * nu0_dim / nu0_nd, &
-             Qvis_loc, Qirr(it, i), Qrad_loc, &
-             Tmid(it, i), Tsurf, kappaR(it, i), tauR(it, i)
+             Qvis_out, Qirr(it, i), Qrad_out, &
+             Tmid(it, i), T_emit, kappa_out, tau_out
     end do
 
     close(iu_st)
 
+    if (use_energy_balance) then
+       call output_sed_dtl_from_cells(it, t, Sigma_cgs_cell, Tspec_cell, kapP_cell, &
+                                      Qrad_cell, Qvis_cell, Qirr_cell)
+    end if
+
   end subroutine output_disk_structure_dtl
 
-  subroutine output_disk_structure(it, t)
-    use mod_global, only : mdot_inner_phys
-    use irradiation_mod, only : L_irr
-    integer(i4b), intent(in) :: it
-    real(dp),    intent(in)  :: t
-
-    integer(i4b), save :: iu_dtl = -1
-    integer(i4b) :: i, ierr_planck
-    character(len=64) :: fname
-    real(dp) :: t_cgs, r_cgs, sigma_cgs, omegaK_cgs
-    real(dp) :: nu_dim_loc, T_loc
-    real(dp) :: kappaR_loc, tauR_loc, kappaP_loc, Qvis_loc, Qrad_loc
-    real(dp) :: Tsurf
-    real(dp) :: cs2
-    real(dp), parameter :: tiny_sigma = 1.0e-8_dp
-
-    t_cgs = t_dim(t)
-    
-    write(fname,'("disk_t",i8.8,".dat")') it
-    open(newunit=iu_dtl, file=fname, status='replace')
-
-    if (k_iter(it) > 0) then
-       if (use_irradiation) then
-          if (m_iter(it) > 0) then
-             write(iu_dtl,'(a, i8, a, 1pe13.5, a, i3, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (converged after', k_iter(it), &
-                  ' iterations; consistent Tmid and Qs after', &
-                  m_iter(it), ' iterations)'
-          else
-             write(iu_dtl,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (converged after', k_iter(it), &
-                  ' iterations; no consistent Tmid and Qs)'
-          end if
-       else
-          write(iu_dtl,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-               ', t =', t_cgs, '[s] (converged after', k_iter(it), ' iterations)'
-       end if
-    else if (k_iter(it) == 0) then
-       write(iu_dtl,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-            ', t =', t_cgs, '[s]'
-    else
-       if (use_irradiation) then
-          if (m_iter(it) > 0) then
-             write(iu_dtl,'(a, i8, a, 1pe13.5, a, i3, a)') '# it =', it, &
-                  ', t =', t_cgs, ' [s] (not converged; consistent Tmid and Qs after', &
-                  m_iter(it), ' iterations)'
-          else
-             write(iu_dtl,'(a, i8, a, 1pe13.5, a)') '# it =', it, &
-                  ', t =', t_cgs, '[s] (not converged; no consistent Tmid and Qs)'
-          end if
-       else
-          write(iu_dtl,'(a, i8, a, 1pe13.5, a)') '# it =', it, &
-               ', t =', t_cgs, '[s] (not converged)'
-      end if
-    end if
-    if (model_type == 'star') then
-       write (iu_dtl, '(a, 1pe13.5, a, 1pe13.5, a, 1pe13.5, a, 1pe13.5, a)') &
-          '# M_star =', M_star, '[g], R_star =', R_star, &
-          '[cm], Teff_star =', Teff_star, '[K], R0 =', R0, '[cm]'
-    else
-       ! mdoel_type = 'bh'
-       write (iu_dtl, '(a, 1pe13.5, a, 1pe13.5, a, 1pe13.5, a, 1pe13.5, a)') &
-          '# M_star =', M_star, '[g], R0 =', R0, '[cm], Mdot(R0) =', &
-          mdot_inner_phys, '[g/s], L_irr =', L_irr, '[erg/s]'
-    end if
-    write(iu_dtl,'(a, 4x, a, 4x, a, 4x, a, 5x, a, 2x, a, 6x, &
-         & a, 9x, a, 9x, a, 8x, a, 5x, a, 3x, a, 3x, a)') '#', 'r(cm)', &
-         & 'sigma(g/cm^2)', 'H(cm)', 'rho(g/cm^3)', 'nu(cm^2/s)', &
-         & 'Qvis', 'Qirr', 'Qrad', 'Tmid(K)', &
-         & 'Tsurf(K)', 'kappaR(cm^2/g)', 'tauR'
-
-    do i = 1, nr
-       r_cgs    = r_dim(r(i))
-       Sigma_cgs = sigma_dim(sigmat(it, i))
-       OmegaK_cgs = omegaK_dim(r(i))
-       T_loc = Tmid(it, i)
-       nu_dim_loc = nu_conv(it,i) * nu0_dim / nu0_nd
-       kappaR_loc = kappaR(it, i)
-       tauR_loc = tauR(it, i)
-
-       if (use_energy_balance) then
-          !-----------------------------------------------
-          ! If Sigma is (numerically) zero, treat as empty
-          !-----------------------------------------------
-          if (sigma_cgs <= tiny_sigma .or. Tmid(it,i) <= 0.0_dp) then
-             H(it, i)      = 0.0_dp
-             rho(it, i)    = 0.0_dp
-             kappaR(it, i) = 0.0_dp
-             tauR(it, i)   = 0.0_dp
-          
-             write(iu_dtl,'(1p,13e13.5)') r_cgs, sigma_cgs, H(it,i), &
-                  rho(it,i), nu_dim_loc, &
-                  0.0_dp, 0.0_dp, 0.0_dp, &  ! Qvis, Qirr, Qrad
-                  0.0_dp, 0.0_dp, 0.0_dp, &  ! Tmid, Tsurf, kappaR
-                  0.0_dp                     ! tauR
-             cycle
-          end if
-
-          call get_opacity_Planck_rhoT(rho(it, i), T_loc, kappaP_loc, ierr_planck)
-          if (ierr_planck /= 0) kappaP_loc = kappaR_loc
-          call Qvis_and_Qrad(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                             kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc, kappaP_loc=kappaP_loc)
-   
-          !! Qrad_loc; radiative flux from both surfaces
-          !! Qrad_loc = 2 * sbc *Tsurf**4
-          Tsurf = (Qrad_loc / (2.0_dp * sbc))**0.25_dp
-       else
-          ! Isotherma-disk quantities
-          if (sigma_cgs <= tiny_sigma) then
-             nu_conv(it, i) = nu(i)
-             H(it, i)     = 0.0_dp
-             rho(it, i)   = 0.0_dp
-             Tmid(it, i)  = 0.0_dp
-             Tsurf        = 0.0_dp
-          else
-            nu_conv(it, i) = nu(i)
-            cs2            = 1.5_dp * nu_dim_loc * omegaK_cgs / alphaSS
-            H(it, i)       = sqrt(cs2) / omegaK_cgs
-            rho(it, i)     = sigma_cgs / (2.0_dp * H(it, i))
-            Tmid(it, i)    = mu * mp * cs2 / kb
-            Tsurf          = Tmid(it, i)
-            !write (*, '(a, 1pe121.3, a, 1pe11.3, a, 1pe11.3, a, 1pe11.3)') &
-            !   'cs2=', cs2, ', H=', H(it, i), ', rho=', rho(it, i), &
-            !   ', Tmid=', Tmid(it, i)
-          end if
-          Qvis_loc = 0.0_dp
-          Qrad_loc = 0.0_dp
-          kappaR(it, i) = 0.0_dp
-          tauR(it, i) = 0.0_dp
-       end if
+  subroutine output_sed_dtl_from_cells(it, t, Sigma_cgs_cell, Tspec_cell, kapP_cell, &
+                                       Qrad_cell, Qvis_cell, Qirr_cell)
+   !-----------------------------------------------------------------------
+   ! Output CBD SED snapshot synchronized with disk_t*.dat.
+   !
+   ! Input arrays are cell-centered values cached in output_disk_structure_dtl:
+   !   Sigma_cgs_cell(i) : surface density [g/cm^2]
+   !   Tspec_cell(i)     : SED-ready temperature [K]
+   !                       (thick: Teff from Qrad; thin: Tmid)
+   !   kapP_cell(i)      : Planck mean absorption opacity [cm^2/g]
+   !
+   ! Gray slab SED:
+   !   dLnu = (2*pi*r*dr) * (2*pi*Bnu(T)) * (1 - exp(-tauP))
+   !   tauP = 0.5 * kapP * Sigma   (one-side)
+   !
+   ! Output columns:
+   !   nu [Hz], L_nu [erg/s/Hz], nu*L_nu [erg/s]
+   !
+   ! Parameters are read via run_control.nml through run_control_mod:
+   !   sed_nnu, sed_nu_min_fac, sed_nu_max_fac
+   !-----------------------------------------------------------------------
+   use kind_params, only : i4b, dp
+   use constants,   only : pi, hpl, kb, cc
+   use mod_global,  only : nr, r, M_star, R0
+   use run_control_mod, only : sed_nnu, sed_nu_min_fac, sed_nu_max_fac
+   use mod_global,  only : mdot_inner_phys
+   use star_params_mod, only : model_type
+   use irradiation_mod, only : L_irr
+   use units_disk_mod, only : t_dim, r_dim
+   implicit none
  
-       write(iu_dtl,'(1p,12e13.5)') r_cgs, sigma_cgs, H(it, i), &
-             rho(it, i), nu_conv(it, i) * nu0_dim / nu0_nd, &
-             Qvis_loc, Qirr(it, i), Qrad_loc, &
-             Tmid(it, i), Tsurf, kappaR(it, i), tauR(it, i)
-    end do
+   integer(i4b), intent(in) :: it
+   real(dp),     intent(in) :: t
+   real(dp),     intent(in) :: Sigma_cgs_cell(nr), Tspec_cell(nr), kapP_cell(nr)
+   real(dp),     intent(in) :: Qrad_cell(nr), Qvis_cell(nr), Qirr_cell(nr)
 
-    close(iu_dtl)
+   integer(i4b), save :: iu_sed = -1
+   integer(i4b) :: i, j, nnu
+   character(len=64) :: fname_sed
+   real(dp) :: t_cgs
+   real(dp), allocatable :: nu_grid(:), Lnu(:), nuLnu(:)
+   real(dp), allocatable :: Lnu_vis(:), Lnu_irr(:), Lnu_tr(:)
+   real(dp), allocatable :: nuLnu_vis(:), nuLnu_irr(:), nuLnu_tr(:)
+   real(dp) :: Tmin, Tmax, nu_min, nu_max, lmin, lmax, dl
+   real(dp) :: r_i, r_ip1, dr_cgs, rmid_cgs, dA
+   real(dp) :: tauP_sed, fac, Bnu
+   real(dp) :: Lbol_sed, Lbol_qrad, Lbol_vis, Lbol_irr, Lbol_tr, relerr, ltot_err
+   real(dp) :: dnu, dLnu
+   real(dp) :: qradp, f_vis, f_irr, f_tr
+   real(dp), parameter :: tiny_q = 1.0e-99_dp
 
-  end subroutine output_disk_structure
-  
+   t_cgs = t_dim(t)
+ 
+   ! ---- Validate controls
+   nnu = max(10_i4b, sed_nnu)
+ 
+   allocate(nu_grid(nnu), Lnu(nnu), nuLnu(nnu))
+   allocate(Lnu_vis(nnu), Lnu_irr(nnu), Lnu_tr(nnu))
+   allocate(nuLnu_vis(nnu), nuLnu_irr(nnu), nuLnu_tr(nnu))
+   Lnu_vis(:)   = 0.0_dp
+   Lnu_irr(:)   = 0.0_dp
+   Lnu_tr(:)    = 0.0_dp
+
+   !--------------------------------------------
+   ! 1) Determine frequency range from Tspec(min/max)
+   !--------------------------------------------
+   Tmin = huge(1.0_dp)
+   Tmax = 0.0_dp
+   do i = 1, nr
+     if (Sigma_cgs_cell(i) <= 0.0_dp) cycle
+     if (Tspec_cell(i) <= 0.0_dp) cycle
+     Tmin = min(Tmin, Tspec_cell(i))
+     Tmax = max(Tmax, Tspec_cell(i))
+   end do
+ 
+   if (Tmax <= 0.0_dp .or. Tmin >= huge(1.0_dp)) then
+     ! Empty disk: write an empty SED safely
+     Tmin = 10.0_dp
+     Tmax = 10.0_dp
+   end if
+ 
+   ! Guard against pathological user inputs
+   if (sed_nu_min_fac <= 0.0_dp) then
+     nu_min = 0.1_dp * kb*Tmin / hpl
+   else
+     nu_min = sed_nu_min_fac * kb*Tmin / hpl
+   end if
+   if (sed_nu_max_fac <= 0.0_dp) then
+     nu_max = 10.0_dp * kb*Tmax / hpl
+   else
+     nu_max = sed_nu_max_fac * kb*Tmax / hpl
+   end if
+ 
+   if (nu_max <= nu_min) then
+     nu_max = 10.0_dp * nu_min
+   end if
+ 
+   !--------------------------------------------
+   ! 2) Build log-spaced frequency grid
+   !--------------------------------------------
+   lmin = log(nu_min)
+   lmax = log(nu_max)
+   dl   = (lmax - lmin) / real(nnu-1, dp)
+   do j = 1, nnu
+     nu_grid(j) = exp(lmin + dl*real(j-1, dp))
+   end do
+ 
+   !--------------------------------------------
+   ! 3) Annulus integration
+   !--------------------------------------------
+   Lnu(:) = 0.0_dp
+   Lbol_sed  = 0.0_dp
+   Lbol_qrad = 0.0_dp
+   do i = 1, nr-1
+     if (Sigma_cgs_cell(i) <= 0.0_dp) cycle
+     if (Tspec_cell(i) <= 0.0_dp) cycle
+ 
+     r_i   = r_dim(r(i))
+     r_ip1 = r_dim(r(i+1))
+     dr_cgs = r_ip1 - r_i
+     if (dr_cgs <= 0.0_dp) cycle
+ 
+     rmid_cgs = 0.5_dp*(r_ip1 + r_i)
+     dA       = 2.0_dp*pi*rmid_cgs*dr_cgs
+ 
+     ! Gray absorption optical depth (one-side)
+     tauP_sed = 0.5_dp * max(kapP_cell(i), 0.0_dp) * max(Sigma_cgs_cell(i), 0.0_dp)
+ 
+     if (tauP_sed > 50.0_dp) then
+       fac = 1.0_dp
+     else
+       fac = 1.0_dp - exp(-max(tauP_sed, 0.0_dp))
+     end if
+
+     qradp = max(Qrad_cell(i), tiny_q)
+
+     ! Fractions based on local heating / radiative loss
+     f_vis = max(Qvis_cell(i), 0.0_dp) / qradp
+     f_irr = max(Qirr_cell(i), 0.0_dp) / qradp
+
+     ! Clamp to [0,1] to avoid pathological overshoots
+     f_vis = min(max(f_vis, 0.0_dp), 1.0_dp)
+     f_irr = min(max(f_irr, 0.0_dp), 1.0_dp)
+
+     ! Residual/trans component (radial transport, time-dependence, numerical residuals, etc.)
+     f_tr  = 1.0_dp - (f_vis + f_irr)
+     if (f_tr < 0.0_dp) then
+        if (f_vis + f_irr > 0.0_dp) then
+           f_vis = f_vis / (f_vis + f_irr)
+           f_irr = 1.0_dp - f_vis
+        else
+           f_vis = 0.0_dp
+           f_irr = 0.0_dp
+        end if
+        f_tr = 0.0_dp
+     end if
+
+     do j = 1, nnu
+       Bnu  = Bnu_planck(nu_grid(j), Tspec_cell(i))
+    
+       ! Both faces: Fnu = 2*pi*Bnu*(1-exp(-tau))
+       dLnu = dA * (2.0_dp*pi) * Bnu * fac
+    
+       Lnu(j)     = Lnu(j)     + dLnu
+       Lnu_vis(j) = Lnu_vis(j) + dLnu * f_vis
+       Lnu_irr(j) = Lnu_irr(j) + dLnu * f_irr
+       Lnu_tr(j)  = Lnu_tr(j)  + dLnu * f_tr
+     end do
+
+     ! ---- Bolometric luminosity from Qrad: L = ∫ (2*pi*r*dr) * Qrad
+     Lbol_qrad = Lbol_qrad + dA * max(Qrad_cell(i), 0.0_dp)
+
+     if (i == 1) then
+       write(*,'(a,1pe12.4,a,1pe12.4,a,1pe12.4,a,1pe12.4)') 'DEBUG f_vis=', f_vis, ' f_irr=', f_irr, ' f_tr=', f_tr, ' qrad=', qradp
+     end if
+   end do
+ 
+   do j = 1, nnu
+     nuLnu(j)     = nu_grid(j) * Lnu(j)
+     nuLnu_vis(j) = nu_grid(j) * Lnu_vis(j)
+     nuLnu_irr(j) = nu_grid(j) * Lnu_irr(j)
+     nuLnu_tr(j)  = nu_grid(j) * Lnu_tr(j)
+   end do
+
+   ! ---- Bolometric luminosity from SED: integrate over log nu for robustness
+   ! Lbol = ∫ Lnu dnu = ∫ (nu*Lnu) d(ln nu)
+   Lbol_sed = 0.0_dp
+   Lbol_vis = 0.0_dp
+   Lbol_irr = 0.0_dp
+   Lbol_tr  = 0.0_dp
+   do j = 1, nnu-1
+      dnu = log(nu_grid(j+1)) - log(nu_grid(j))
+      Lbol_sed = Lbol_sed + 0.5_dp * (nu_grid(j)*Lnu(j) + nu_grid(j+1)*Lnu(j+1)) * dnu
+      Lbol_vis = Lbol_vis + 0.5_dp * (nu_grid(j)*Lnu_vis(j) + nu_grid(j+1)*Lnu_vis(j+1)) * dnu
+      Lbol_irr = Lbol_irr + 0.5_dp * (nu_grid(j)*Lnu_irr(j) + nu_grid(j+1)*Lnu_irr(j+1)) * dnu
+      Lbol_tr  = Lbol_tr + 0.5_dp * (nu_grid(j)*Lnu_tr(j) + nu_grid(j+1)*Lnu_tr(j+1)) * dnu
+   end do
+
+   ! ---- Relative error between SED and Qrad bolometric luminosities
+   if (Lbol_qrad > 0.0_dp) then
+      relerr = (Lbol_sed - Lbol_qrad) / Lbol_qrad
+   else if (Lbol_sed > 0.0_dp) then
+      relerr = 1.0_dp
+   else
+      relerr = 0.0_dp
+   end if
+
+   ! ---- Relative error between SED and Qvis bolometric luminosities
+   if (Lbol_sed > 0.0_dp) then
+     ltot_err = (Lbol_vis + Lbol_irr + Lbol_tr - Lbol_sed) / Lbol_sed
+   else
+     ltot_err = 0.0_dp
+   end if
+
+   !--------------------------------------------
+   ! 4) Write file
+   !--------------------------------------------
+   write(fname_sed,'("sed_t",i8.8,".dat")') it
+   open(newunit=iu_sed, file=fname_sed, status='replace', action='write')
+ 
+   write(iu_sed,'(a, i8, a, 1pe13.5, a)') '# it =', it, ', t =', t_cgs, '[s]'
+   if (model_type == 'bh') then
+     write(iu_sed,'(a,1pe13.5,a,1pe13.5,a,1pe13.5,a,1pe13.5,a)') &
+       '# M_star =', M_star, '[g], R0 =', R0, '[cm], Mdot(R0) =', &
+       mdot_inner_phys, '[g/s], L_irr =', L_irr, '[erg/s]'
+   else
+     write(iu_sed,'(a,1pe13.5,a,1pe13.5,a)') '# M_star =', M_star, '[g], R0 =', R0, '[cm]'
+   end if
+   write(iu_sed,'(a, i0, a, 1pe13.5, a, 1pe13.5)') '# sed_nnu = ', nnu, &
+        ', sed_nu_min_fac =', sed_nu_min_fac, ', sed_nu_max_fac =', sed_nu_max_fac
+   write(iu_sed,'(a, 1pe13.5, a, 1pe13.5, a)') '# nu_min = ', nu_min, &
+        ' [Hz], nu_max =', nu_max, ' [Hz]'
+   write(iu_sed,'(a,1pe13.5,a,1pe13.5,a,1pe13.5)') &
+        '# Lbol = ', Lbol_sed, ' [erg/s], Integration of Qrad = ', Lbol_qrad, &
+        ' [erg/s] -> error(relative) = ', relerr
+   write(iu_sed,'(a,1pe11.3,a,1pe11.3,a,1pe11.3,a, 1pe11.3)') &
+        '# Lbol_vis =', Lbol_vis, ' [erg/s], Lbol_irr =', Lbol_irr, &
+        ' [erg/s], Lbol_tr =', Lbol_tr, &
+        ' [erg/s] vs. Lbol -> error(relative) =', ltot_err
+   write(iu_sed,'(a, 1pe13.5, a, 1pe13.5, a, 1pe13.5)') &
+        '# Fractions (bolometric): Lbol_vis/Lbol =', Lbol_vis/Lbol_sed, &
+        ', Lbol_irr/Lbol =', Lbol_irr/Lbol_sed, &
+        ', Lbol_tr/Lbol =', Lbol_tr/Lbol_sed
+   write(iu_sed,'(a)') '#'
+   write(iu_sed,'(a, 5x, a, 9x, a, 5x, a, 5x, a, 5x, a, 5x, a, 5x, a, 5x, a, 6x, a)') '#', &
+         'nu', 'Lnu_tot', 'nuLnu_tot', 'Lnu_vis', 'nuLnu_vis', 'Lnu_irr', 'nuLnu_irr', &
+         'Lnu_tr', 'nuLnu_tr'
+   write(iu_sed,'(a, 4x, a, 7x, a, 4x, a, 5x, a, 4x, a, 5x, a, 4x, a, 5x, a, 4x, a)') '#', &
+         '[Hz]', '[erg/s/Hz]', '[erg/s]', '[erg/s/Hz]', '[erg/s]', '[erg/s/Hz]', &
+         '[erg/s]', '[erg/s/Hz]', '[erg/s]'
+   do j = 1, nnu
+     write(iu_sed,'(1p9e13.5)') nu_grid(j), Lnu(j), nuLnu(j), &
+           Lnu_vis(j), nuLnu_vis(j), Lnu_irr(j), nuLnu_irr(j), Lnu_tr(j), nuLnu_tr(j)
+   end do
+   close(iu_sed)
+ 
+   deallocate(nu_grid, Lnu, nuLnu)
+ 
+ contains
+ 
+   pure function Bnu_planck(nu, T) result(B)
+     use kind_params, only : dp
+     use constants,   only : hpl, kb, cc
+     real(dp), intent(in) :: nu, T
+     real(dp) :: B, x, ex
+ 
+     if (T <= 0.0_dp .or. nu <= 0.0_dp) then
+       B = 0.0_dp
+       return
+     end if
+ 
+     x = hpl*nu/(kb*T)
+ 
+     if (x > 700.0_dp) then
+       B = 0.0_dp
+     else
+       ex = exp(x)
+       B  = (2.0_dp*hpl*nu**3 / cc**2) / (ex - 1.0_dp)
+     end if
+   end function Bnu_planck
+ 
+  end subroutine output_sed_dtl_from_cells
+   
 end module output_mod

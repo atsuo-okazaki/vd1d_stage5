@@ -25,7 +25,10 @@ module evolve_try_mod
 
 contains
 
-logical function evolve_try_to_target(it_out, t_nd0, dt_out, dr) result(ok)
+logical function evolve_try_to_target(it_out, t_nd0, dt_out, dr, &
+                 rQ_rms_full, rQ_p95_full, rQ_max_full, &
+                 rdt_max_full, rdt_rms_full, rdt_p95_full, qbal_max_full, qbal_p95_full) &
+                 result(ok)
   use kind_params, only : dp, i4b
   use mod_global,  only : nr, r
   use inflow_source_mod, only : compute_source
@@ -34,16 +37,34 @@ logical function evolve_try_to_target(it_out, t_nd0, dt_out, dr) result(ok)
   integer(i4b), intent(in) :: it_out
   real(dp),     intent(in) :: t_nd0, dt_out
   real(dp),     intent(in) :: dr(nr)
-
+  real(dp),    intent(out) :: rQ_rms_full, rQ_p95_full, rQ_max_full
+  real(dp), intent(out) :: rdt_max_full, rdt_rms_full, rdt_p95_full
+  real(dp), intent(out) :: qbal_max_full, qbal_p95_full
+  real(dp) :: rQ_rms_tmp, rQ_p95_tmp, rQ_max_tmp
+  real(dp) :: rdt_max_tmp, rdt_rms_tmp, rdt_p95_tmp
+  real(dp) :: qbal_max_tmp, qbal_p95_tmp
   real(dp) :: t_local, remaining
-  real(dp) :: dt_seed, dt_try, dt_used
+  real(dp) :: dt_seed, dt_try, dt_used, dt_next
   real(dp) :: source_n(nr), source_np1(nr)
+  real(dp) :: grow_fac
   integer(i4b) :: attempt
+  integer(i4b) :: attempt_used
   integer(i4b), parameter :: max_retry_dt = 12
   real(dp),    parameter :: dt_shrink = 0.5_dp
   real(dp),    parameter :: dt_min = 1.0e-12_dp  ! nd safeguard (tune)
-  real(dp),    parameter :: dt_grow = 1.2_dp      ! optional mild growth
+  real(dp),    parameter :: dt_grow = 1.2_dp     ! optional mild growth
 
+  real(dp), parameter :: rdt_p95_target = 1.0e-2_dp
+  real(dp), parameter :: eps_rdt        = 1.0e-30_dp
+  real(dp), parameter :: beta_ctrl      = 0.5_dp      ! sqrt controller
+  
+  real(dp), parameter :: grow_cap_good  = 20.0_dp     ! 10-50
+  real(dp), parameter :: grow_cap_retry = 5.0_dp      ! 2-10
+  real(dp), parameter :: grow_floor     = 1.05_dp     ! > 1.0
+  real(dp), parameter :: shrink_floor   = 0.2_dp      ! lower limit of shrinking factor
+  
+  real(dp) :: cap, ratio, ctrl
+      
   ok = .false.
 
   t_local   = t_nd0
@@ -56,24 +77,61 @@ logical function evolve_try_to_target(it_out, t_nd0, dt_out, dr) result(ok)
   if (dt_seed <= 0.0_dp) dt_seed = dt_out
   dt_try  = min(dt_out, dt_seed)
 
+  rQ_rms_full = 0.0_dp
+  rQ_p95_full = 0.0_dp
+  rQ_max_full = 0.0_dp
+  rdt_max_full  = 0.0_dp
+  rdt_rms_full  = 0.0_dp
+  rdt_p95_full  = 0.0_dp
+  qbal_max_full = 0.0_dp
+  qbal_p95_full = 0.0_dp
+ 
   do while (remaining > 0.0_dp)
 
-     ! never step beyond the output interval
      dt_try = min(dt_try, remaining)
 
-     ! source at the beginning of this substep
      call compute_source(t_local, r, dr, source_n)
 
-     !------------------------------------
-     ! retry loop for THIS substep only
-     !------------------------------------
      dt_used = dt_try
+     attempt_used = 0
+     ok = .false.
+
      do attempt = 1, max_retry_dt
+
+        ! For trial steps
+        rQ_rms_tmp   = rQ_rms_full
+        rQ_p95_tmp   = rQ_p95_full
+        rQ_max_tmp   = rQ_max_full
+        rdt_max_tmp  = rdt_max_full
+        rdt_rms_tmp  = rdt_rms_full
+        rdt_p95_tmp  = rdt_p95_full
+        qbal_max_tmp = qbal_max_full
+        qbal_p95_tmp = qbal_p95_full
 
         call compute_source(t_local + dt_used, r, dr, source_np1)
 
-        ok = substep_try_and_commit(it_out, t_local, dt_used, source_n, source_np1)
-        if (ok) exit
+        ok = substep_try_and_commit(it_out, t_local, dt_used, source_n, source_np1, &
+                                  rQ_rms_tmp, rQ_p95_tmp, rQ_max_tmp, &
+                                  rdt_max_tmp, rdt_rms_tmp, rdt_p95_tmp, &
+                                  qbal_max_tmp, qbal_p95_tmp)
+
+        if (ok) then
+           attempt_used = attempt
+
+           ! After commitment
+           rQ_rms_full   = rQ_rms_tmp
+           rQ_p95_full   = rQ_p95_tmp
+           rQ_max_full   = rQ_max_tmp
+           rdt_max_full  = rdt_max_tmp
+           rdt_rms_full  = rdt_rms_tmp
+           rdt_p95_full  = rdt_p95_tmp
+           qbal_max_full = qbal_max_tmp
+           qbal_p95_full = qbal_p95_tmp
+           write(*,'(A,1PE11.3,A,1PE11.3,A,I2,A,1PE11.3)') 'TRY ok: t_local=', t_local, &
+               ' dt_used=', dt_used, ' attempt=', attempt_used, ' remaining=', remaining
+           exit
+        end if
+        write(*,'(A,1PE11.3)') 'TRY failed, shrinking dt -> ', dt_used*dt_shrink
 
         dt_used = dt_used * dt_shrink
         if (dt_used < dt_min) then
@@ -84,17 +142,26 @@ logical function evolve_try_to_target(it_out, t_nd0, dt_out, dr) result(ok)
 
      if (.not. ok) return
 
-     !------------------------------------
-     ! substep succeeded and is already committed
-     !------------------------------------
+     ! substep succeeded (and already committed)
      t_local   = t_local + dt_used
      remaining = remaining - dt_used
 
-     ! remember success for the NEXT call (store a *grown* seed)
-     call set_dt_seed( min(dt_out, dt_used * dt_grow) )
-
-     ! next try inside this same output interval
-     dt_try = min( max(dt_used * dt_grow, dt_min), remaining )
+     ! --- after a successful commit ---
+     ! control factor: if rdt_p95 is far below target, we can grow dt aggressively,
+     ! deciding cap based on whether we had to retry.
+     if (attempt_used > 1) then
+        cap = grow_cap_retry
+     else
+        cap = grow_cap_good
+     end if
+   
+     ratio = rdt_p95_target / max(rdt_p95_full, eps_rdt)
+     ctrl  = ratio**beta_ctrl
+     ctrl  = max(shrink_floor, min(cap, ctrl))
+     grow_fac = max(grow_floor, ctrl)
+   
+     call set_dt_seed( min(dt_out, dt_used * grow_fac) )
+     dt_try = min( max(dt_used * grow_fac, dt_min), remaining )
 
   end do
 
@@ -107,10 +174,12 @@ end function evolve_try_to_target
                                source_n, source_np1, &
                                Qirr_prof_in, dYdXi_in, shadow_in, &
                                sigma_out, nu_out, &
-                               T_out, H_out, rho_out, kappa_out, tau_out, &
+                               T_out, H_out, rho_out, kappa_out, kappa_planck_out, tau_out, &
                                Qvis_out, Qrad_out, Qirr_out, dYdXi_out, shadow_out, &
-                               kiter_out, miter_out )
-    use mod_global,  only : nr, r, nu, sigmat, alpha, &
+                               kiter_out, miter_out, &
+                               rQ_rms_out, rQ_p95_out, rQ_max_out, &
+                               rdt_max_out, rdt_rms_out, rdt_p95_out, qbal_max_out, qbal_p95_out )
+    use mod_global,  only : nr, r, nu, sigmat, alpha, t0, &
                             use_energy_balance, use_energy_pde, &
                             use_be_decretion, use_wind_truncation, &
                             r_edge, i_edge, nu0_dim, nu0_nd, nu_conv
@@ -129,24 +198,27 @@ end function evolve_try_to_target
     real(dp),  intent(in) :: source_n(nr), source_np1(nr)
 
     real(dp), intent(out) :: sigma_out(nr), nu_out(nr)
-    real(dp), intent(out) :: T_out(nr), H_out(nr), rho_out(nr), kappa_out(nr), tau_out(nr)
+    real(dp), intent(out) :: T_out(nr), H_out(nr), rho_out(nr), kappa_out(nr), kappa_planck_out(nr), tau_out(nr)
     real(dp), intent(out) :: Qvis_out(nr), Qrad_out(nr), Qirr_out(nr), dYdXi_out(nr)
     logical,  intent(out) :: shadow_out(nr)
     integer(i4b), intent(out) :: kiter_out
     integer(i4b), intent(out) :: miter_out
+    real(dp), intent(out) :: rQ_rms_out, rQ_p95_out, rQ_max_out
+    real(dp), intent(out) :: rdt_max_out, rdt_rms_out, rdt_p95_out
+    real(dp), intent(out) :: qbal_max_out, qbal_p95_out
 
     real(dp) :: sigma_old(nr)
     real(dp) :: sigma_star(nr), sigma_commit(nr)
     real(dp) :: src_theta(nr)
     real(dp) :: sigma_prev(nr), sigma_new(nr)
-    real(dp) :: H_prev(nr), rho_prev(nr), kappa_prev(nr), tau_prev(nr),  &
+    real(dp) :: H_prev(nr), rho_prev(nr), kappa_prev(nr), kappa_planck_prev(nr), tau_prev(nr),  &
                 Qvis_prev(nr), Qrad_prev(nr), Qirr_prev(nr), dYdXi_prev(nr)
     real(dp) :: Qirr_prof_in(nr), dYdXi_in(nr)
     real(dp) :: T_prev(nr), T_trial(nr), T_relaxed(nr)
     real(dp) :: nu_new(nr), nu_trial(nr), nu_relaxed(nr)
 
     real(dp) :: H_trial(nr), rho_trial(nr)
-    real(dp) :: kappa_trial(nr), tau_trial(nr)
+    real(dp) :: kappa_trial(nr), kappa_planck_trial(nr), tau_trial(nr)
 
     real(dp) :: Qvis_trial(nr), Qrad_trial(nr), Qirr_trial(nr)
     real(dp) :: dYdXi_trial(nr)
@@ -157,6 +229,18 @@ end function evolve_try_to_target
     real(dp) :: Qirr_prof(nr)
     logical :: shadow_try(nr)
     logical :: converged
+
+    ! --- Irradiation fixed-point residual statistics (last accepted) ---
+    real(dp) :: rQ_rms, rQ_p95, rQ_max
+    real(dp) :: rQ_rms_last, rQ_p95_last, rQ_max_last
+    real(dp) :: rdt_max_loc, rdt_rms_loc, rdt_p95_loc, qbal_max_loc, qbal_p95_loc
+    real(dp) :: rdt_max_keep, rdt_rms_keep, rdt_p95_keep, qbal_max_keep, qbal_p95_keep
+
+    ! Work array for percentile (allocated once and reused)
+    real(dp), allocatable :: eps_work(:)
+    integer(i4b) :: nwork
+    integer(i4b) :: m_used_last
+    logical      :: irr_converged
 
     real(dp) :: err_sig, err_T, err_nu, err_dQ
     real(dp) :: sig2, T2, nu2, dQ2, err2, err_rms
@@ -185,6 +269,8 @@ end function evolve_try_to_target
 
     integer(i4b), parameter :: mmax_irr = 6
     real(dp),     parameter :: eps_rQ   = 1.0e-2_dp
+    ! Max dt (nd) per irradiation sub-step; larger dt split internally to improve convergence
+    real(dp),     parameter :: dt_irr_max_nd = 200.0_dp
     real(dp), parameter :: Qfloor = 1.0e-40_dp   ! or 1e-60; choose safely above underflow
     !--------- iteration parameters: 
     !  The follwoing set is well tuned. Don't chenge them carelessly.
@@ -217,18 +303,22 @@ end function evolve_try_to_target
     real(dp) :: Qirr_calc(nr), Qirr_raw(nr), Y_prof(nr), dYdXi_calc(nr)
     logical  :: shadow_new(nr)
     real(dp) :: hoverr_raw(nr), hoverr_sm(nr), Hshadow_cgs(nr)
+    real(dp) :: T_work(nr)
+    real(dp) :: dt_sub_phys
+    integer(i4b) :: n_sub, k_sub
     real(dp) :: maxQcalc, maxQprof
     real(dp) :: wloc_irr, rQ, numr, denr, relprev_rQ
     integer(i4b) :: m_irr, n_blow_irr
-
-    file91A = 'residuals.txt'
-    file91B = 'convergence_history.txt'
+    logical :: do_iter_irr
 
     sigma_old(:) = sigma_in(:)
-
     src_theta(:) = (1.0_dp - alpha) * source_n(:) + alpha * source_np1(:)
-
     T_prev(:) = T_in(:)
+
+    rQ_rms_last = huge(1.0_dp)
+    rQ_p95_last = huge(1.0_dp)
+    rQ_max_last = huge(1.0_dp)
+    nwork       = 0
 
     if (.not. use_energy_balance) then
        ! Case A: isothermal (nu is fixed here)
@@ -312,30 +402,92 @@ end function evolve_try_to_target
           n_blow_irr   = 0
           rQ_last  = huge(1.0_dp)
           has_prev = .false.
+ 
+          ! --- iteration accounting (must be set before the m_irr loop) ---
+          miter_out     = 0
+          m_used_last   = 0
+          irr_converged = .false.
 
-          do m_irr = 1, mmax_irr
+          do_iter_irr = (use_irradiation .and. (L_irr > Lirr_floor))
+
+          if (.not. do_iter_irr) then
+             ! Force a self-consistent "no irradiation" state
+             Qirr_prof(:)  = 0.0_dp
+             shadow_try(:) = .true.      ! or keep your geometry shadow, but for "no Qirr" it doesn't matter
+             dYdXi_out(:)  = 0.0_dp      ! optional
+          end if
+          
+          m_irr_loop: do m_irr = 1, mmax_irr
 
              n_retry = 0
 
-             do  ! retry loop (same m_irr)
+             retry_loop: do  ! retry loop (same m_irr)
 
                 !------------------------------------------------------
                 ! 1) Solve energy PDE with CURRENT (shadow_try, Qirr_prof)
+                !    When L_irr>0 and dt large, sub-step to improve irradiation convergence
                 !------------------------------------------------------
-                call energy_pde_step_try( nr, r_cgs, Sigma_cgs, OmegaK_cgs, shadow_try, &
-                     Qirr_prof, dt_phys, T_prev, &
-                     T_out, H_out, rho_out, kappa_out, tau_out, &
-                     Qvis_out, Qrad_out, Qirr_out, &
-                     nu_out, converged )
-
+                if (do_iter_irr .and. dt_loc > dt_irr_max_nd) then
+                   n_sub       = ceiling(dt_loc / dt_irr_max_nd)
+                   dt_sub_phys = (dt_loc / real(n_sub, dp)) * t0
+                   T_work(:)   = T_prev(:)
+                   do k_sub = 1, n_sub
+                      call energy_pde_step_try( nr, r_cgs, Sigma_cgs, OmegaK_cgs, shadow_try, &
+                              Qirr_prof, dt_sub_phys, T_work, &
+                              T_out, H_out, rho_out, kappa_out, kappa_planck_out, tau_out, &
+                              Qvis_out, Qrad_out, Qirr_out, &
+                              nu_out, converged, &
+                              rdt_max=rdt_max_loc, rdt_rms=rdt_rms_loc, rdt_p95=rdt_p95_loc, &
+                              qbal_max=qbal_max_loc, qbal_p95=qbal_p95_loc )
+                      if (.not. converged) exit
+                      T_work(:) = T_out(:)
+                   end do
+                else
+                   call energy_pde_step_try( nr, r_cgs, Sigma_cgs, OmegaK_cgs, shadow_try, &
+                           Qirr_prof, dt_phys, T_prev, &
+                           T_out, H_out, rho_out, kappa_out, kappa_planck_out, tau_out, &
+                           Qvis_out, Qrad_out, Qirr_out, &
+                           nu_out, converged, &
+                           rdt_max=rdt_max_loc, rdt_rms=rdt_rms_loc, rdt_p95=rdt_p95_loc, &
+                           qbal_max=qbal_max_loc, qbal_p95=qbal_p95_loc )
+                end if
+                     
                 if (.not. converged) then
                    ! keep your existing failure handling
                    kiter_out = -99
                    return
                 end if
 
-                if (.not. use_irradiation .or. L_irr <= Lirr_floor) exit  ! nothing to iterate
+                ! ==========================================================
+                ! Always keep the latest time-integration residual stats
+                ! because they belong to THIS accepted PDE attempt.
+                ! (Independent of irradiation fixed-point acceptance)
+                ! ==========================================================
+                rdt_max_keep  = rdt_max_loc
+                rdt_rms_keep  = rdt_rms_loc
+                rdt_p95_keep  = rdt_p95_loc
+                qbal_max_keep = qbal_max_loc
+                qbal_p95_keep = qbal_p95_loc
 
+                if (.not. do_iter_irr) then
+                  ! Force a self-consistent "no irradiation" state for THIS substep
+                  Qirr_prof(:)  = 0.0_dp
+                  Qirr_calc(:)  = 0.0_dp
+                  Qirr_raw(:)   = 0.0_dp
+                  shadow_try(:) = .true.
+                  shadow_new(:) = .true.
+                  dYdXi_out(:)  = 0.0_dp
+                  dYdXi_calc(:) = 0.0_dp
+         
+                  ! ---- add: finalize iteration bookkeeping ----
+                  irr_converged = .true.
+                  m_used_last   = 0
+                  rQ_last       = 0.0_dp
+                  has_prev      = .true.
+         
+                  exit m_irr_loop
+               end if
+                        
                 !------------------------------------------------------
                 ! 2) Recompute shadow_new(H_out) and Qirr_calc(H_out)
                 !    (use your existing blocks for:
@@ -433,12 +585,10 @@ end function evolve_try_to_target
                 if (maxQcalc < Qfloor .and. maxQprof < Qfloor) then
                    rQ = 0.0_dp
 
-                   ! accept the "zero irradiation" consistent state
                    shadow_try(:) = shadow_new(:)
                    dYdXi_out(:)  = 0.0_dp
                    Qirr_prof(:)  = 0.0_dp
 
-                   ! update warm-start buffer with zeroes
                    call ensure_ws_alloc(nr)
                    Qirr_ws(:)   = 0.0_dp
                    dYdXi_ws(:)  = 0.0_dp
@@ -448,31 +598,22 @@ end function evolve_try_to_target
                    rQ_last  = 0.0_dp
                    has_prev = .true.
 
-                   exit   ! exit retry loop (go to next m_irr / or later break)
+                   m_used_last   = m_irr
+                   irr_converged = .true.   ! Regard this case as being converged
+                   exit
                 end if
 
                 !------------------------------------------------------
-                ! 3) True fixed-point residual rQ: ||Qirr_calc - Qirr_prof|| / ||Qirr_prof||
+                ! 3) Fixed-point residual stats for irradiation:
+                !    eps_i = |Qcalc-Qprof| / max(|Qprof|,|Qcalc|,Qfloor)
+                !    rQ_rms = sqrt( sum eps_i^2 / N )
+                !    rQ_max = max eps_i
+                !    rQ_p95 = 95th percentile of eps_i
                 !------------------------------------------------------
-                numr = 0.0_dp
-                denr = 0.0_dp
-!$omp parallel do default(shared) private(i,qref) reduction(+:numr,denr)
-                do i = 1, nr
-                   if (Sigma_cgs(i) <= 1.0e-8_dp) cycle
+                call compute_relerr_stats_qirr(nr, Sigma_cgs, Qirr_prof, Qirr_calc, Qfloor, &
+                                               rQ_rms, rQ_p95, rQ_max, eps_work, nwork)
 
-                   ! ignore cells where both are essentially zero
-                   if (abs(Qirr_prof(i)) < Qfloor .and. abs(Qirr_calc(i)) < Qfloor) cycle
-
-                   qref = max( abs(Qirr_prof(i)), abs(Qirr_calc(i)), Qfloor )
-                   numr = numr + (Qirr_calc(i) - Qirr_prof(i))**2
-                   denr = denr + qref**2
-                end do
-!$omp end parallel do
-                if (denr <= Qfloor**2) then
-                   rQ = 0.0_dp
-                else
-                   rQ = sqrt(numr / denr)
-                end if
+                rQ = rQ_rms    ! keep legacy scalar name if other logic uses rQ
 
                 if (.not. ieee_is_finite(rQ) .or. rQ > 1.0e2_dp) then
                    if (n_retry < n_retry_max) then
@@ -498,13 +639,11 @@ end function evolve_try_to_target
 
                 ! 4) Converged?
                 if (rQ < eps_rQ) then
-
                    shadow_try(:) = shadow_new(:)
                    dYdXi_out(:)  = dYdXi_calc(:)
                    Qirr_prof(:)  = Qirr_calc(:)
 
                    call ensure_ws_alloc(nr)
-
                    Qirr_ws(:)   = Qirr_prof(:)
                    dYdXi_ws(:)  = dYdXi_out(:)
                    shadow_ws(:) = shadow_try(:)
@@ -512,8 +651,14 @@ end function evolve_try_to_target
 
                    rQ_last  = rQ
                    has_prev = .true.
-                   exit
 
+                   rQ_rms_last = rQ_rms
+                   rQ_p95_last = rQ_p95
+                   rQ_max_last = rQ_max
+
+                   m_used_last   = m_irr
+                   irr_converged = .true.
+                   exit
                 end if
 
                 ! 5) Backtrack if residual worsened
@@ -551,25 +696,58 @@ end function evolve_try_to_target
 
                 ! Update "previous" only after accepting the step
                 rQ_last = rQ
+                rQ_rms_last = rQ_rms
+                rQ_p95_last = rQ_p95
+                rQ_max_last = rQ_max
                 has_prev = .true.
+                m_used_last = m_irr   ! keep last executed m_irr even if not converged
 
                 ! Better initial guess for next PDE solve
                 T_prev(:) = T_out(:)
 
-                exit  ! exit retry loop (go to next m_irr)
+                exit retry_loop  ! exit to go to next m_irr
 
-             end do  ! retry loop
-
-             if (.not. use_irradiation .or. L_irr <= Lirr_floor) exit
+             end do retry_loop
 
              ! Optional: If rQ is already tiny, you can break early
              if (has_prev .and. rQ_last < eps_rQ) exit
 
-          end do  ! m_irr
+          end do m_irr_loop
 
           shadow_out(:) = shadow_try(:)
           kiter_out     = 0
-          miter_out     = -99
+
+          ! Report iterations: +m means converged, -m means not converged
+          if (use_irradiation .and. L_irr > Lirr_floor) then
+             if (m_used_last <= 0) m_used_last = mmax_irr  ! safety
+             if (irr_converged) then
+                miter_out =  m_used_last
+             else
+                miter_out = -m_used_last
+             end if
+          else
+             miter_out = 0
+          end if
+
+          if (use_irradiation .and. L_irr > Lirr_floor) then
+             rQ_rms_out = rQ_rms_last
+             rQ_p95_out = rQ_p95_last
+             rQ_max_out = rQ_max_last
+             rdt_max_out  = rdt_max_keep
+             rdt_rms_out  = rdt_rms_keep
+             rdt_p95_out  = rdt_p95_keep
+             qbal_max_out = qbal_max_keep
+             qbal_p95_out = qbal_p95_keep
+          else
+             rQ_rms_out = 0.0_dp
+             rQ_p95_out = 0.0_dp
+             rQ_max_out = 0.0_dp
+             rdt_max_out  = 0.0_dp
+             rdt_rms_out  = 0.0_dp
+             rdt_p95_out  = 0.0_dp
+             qbal_max_out = 0.0_dp
+             qbal_p95_out = 0.0_dp
+          end if
 
        else
           !=======================================================
@@ -581,7 +759,7 @@ end function evolve_try_to_target
 
           sigma_prev(:) = sigma_new(:)
           nu_new(:)     = nu(:)
-
+      
           ! ---------------------------------------------------------
           ! Seed "previous" state for relaxation WITHOUT time-history arrays.
           ! Use the substep inputs as the previous state.
@@ -593,7 +771,7 @@ end function evolve_try_to_target
           ! This avoids starting H/rho/kappa/tau/Q arrays from zeros.
           call solve_structure_from_sigma( nr, r, sigma_new, T_prev, &
                                            nu_new, T_prev, H_prev, rho_prev, &
-                                           kappa_prev, tau_prev, &
+                                           kappa_prev, kappa_planck_prev, tau_prev, &
                                            Qvis_prev, Qrad_prev, Qirr_prev, &
                                            dYdXi_prev, shadow_prev, miter_out )
 
@@ -614,7 +792,7 @@ end function evolve_try_to_target
              !     Qvis_trial, Qrad_trial, Qirr_trial, dYdXi_trial, shadow_trial )
              call solve_structure_from_sigma( nr, r, sigma_prev, T_prev, &
                                     nu_trial, T_trial, H_trial, rho_trial, &
-                                    kappa_trial, tau_trial,                &
+                                    kappa_trial, kappa_planck_trial, tau_trial, &
                                     Qvis_trial, Qrad_trial, Qirr_trial,    &
                                     dYdXi_trial, shadow_trial, miter_out )
 
@@ -687,6 +865,7 @@ end function evolve_try_to_target
 
              !-------------------------
              if (firstA) then
+                file91A = 'residuals.txt'
                 open(newunit=iu_res, file=trim(file91A), status='replace', &
                      action='write')
                 write (iu_res, '("  k  T/nu i_max  Max(residual)     tauR        Sigma        Tmid          nu")')
@@ -709,6 +888,7 @@ end function evolve_try_to_target
                  err_nu < eps_nu .and. err_dQ < eps_Q) then
                 kiter_out = k
                 if (firstB) then
+                   file91B = 'convergence_history.txt'
                    open(newunit=iu_conv, file=trim(file91B), status='replace', &
                         action='write')
                    firstB = .false.
@@ -773,7 +953,7 @@ end function evolve_try_to_target
              !     Qvis_out, Qrad_out, Qirr_out, dYdXi_out, shadow_out )
              call solve_structure_from_sigma( nr, r, sigma_commit, T_prev, &
                                     nu_out, T_out, H_out, rho_out, &
-                                    kappa_out, tau_out,            &
+                                    kappa_out, kappa_planck_out, tau_out,            &
                                     Qvis_out, Qrad_out, Qirr_out,  &
                                     dYdXi_out, shadow_out, miter_out )
           else
@@ -783,6 +963,7 @@ end function evolve_try_to_target
              H_out(:)      = 0.0_dp
              rho_out(:)    = 0.0_dp
              kappa_out(:)  = 0.0_dp
+             kappa_planck_out(:) = 0.0_dp
              tau_out(:)    = 0.0_dp
              Qvis_out(:)   = 0.0_dp
              Qrad_out(:)   = 0.0_dp
@@ -818,7 +999,10 @@ end function evolve_try_to_target
     end if
   end subroutine ensure_ws_alloc
 
-logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source_np1) result(ok)
+logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source_np1, &
+                                       rQ_rms_full, rQ_p95_full, rQ_max_full, &
+                                       rdt_max_full, rdt_rms_full, rdt_p95_full, &
+                                       qbal_max_full, qbal_p95_full) result(ok)
   use mod_global, only : nr, r, &
                          sigma_cur, nu_cur, Tmid_cur, H_cur, rho_cur, kappa_cur, tau_cur, &
                          Qvis_cur, Qrad_cur, Qirr_cur, dYdXi_cur, shadow_cur, &
@@ -830,27 +1014,39 @@ logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source
                               build_Qirr_profile_eq16_with_raw, & ! a wrapper routine
                               fix_Qirr_negative_spikes
   use hot_region_metrics_mod, only : update_hot_region_metrics_after_commit
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
   implicit none
+
   integer(i4b), intent(in) :: it_out
   real(dp),     intent(in) :: t_local, dt_nd
   real(dp),     intent(in) :: source_n(nr), source_np1(nr)
+  real(dp),  intent(inout) :: rQ_rms_full, rQ_p95_full, rQ_max_full
+  real(dp), intent(inout) :: rdt_max_full, rdt_rms_full, rdt_p95_full
+  real(dp), intent(inout) :: qbal_max_full, qbal_p95_full
 
   ! trial arrays
   real(dp) :: sigma_try(nr), nu_try(nr)
-  real(dp) :: T_try(nr), H_try(nr), rho_try(nr), kappa_try(nr), tau_try(nr)
+  real(dp) :: T_try(nr), H_try(nr), rho_try(nr), kappa_try(nr), kappa_planck_try(nr), tau_try(nr)
   real(dp) :: Qvis_try(nr), Qrad_try(nr), Qirr_try(nr), dYdXi_try(nr)
   logical  :: shadow_try(nr)
   integer(i4b) :: kiter_try, miter_try
+  integer(i4b) :: ireason
 
   ! irradiation profile for THIS substep (computed at substep start geometry)
   real(dp) :: Qirr_prof(nr), dYdXi_prof(nr)
   real(dp) :: Qirr_raw(nr), Y_prof(nr)
   real(dp) :: hoverr(nr)
+  real(dp) :: rQ_rms_sub, rQ_p95_sub, rQ_max_sub
+  real(dp) :: rdt_max_sub, rdt_rms_sub, rdt_p95_sub
+  real(dp) :: qbal_max_sub, qbal_p95_sub
+  real(dp) :: rdt_max_dbg, rdt_p95_dbg
+  
   integer(i4b), save :: iu_dbg = -1
   logical  :: shadow_prof(nr)
   logical, save :: dbg_first = .true.
   character(len=*), parameter :: dbgfile = 'diag_shadow_qirr.dat'
 
+  
   ! Work array for LOH24 (r_cgs; H uses Hshadow_cgs from smoothed H/r)
   real(dp) :: r_cgs(nr)
   real(dp) :: mdot_tmp
@@ -860,11 +1056,20 @@ logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source
   real(dp) :: Hshadow_cgs(nr)
   real(dp) :: hoverr_raw(nr), hoverr_sm(nr)
 
+  ! Initialization of the full-step aggregates
+  !rQ_rms_full   = 0.0_dp
+  !rQ_p95_full   = 0.0_dp
+  !rQ_max_full   = 0.0_dp
+  !rdt_rms_full  = 0.0_dp
+  !rdt_p95_full  = 0.0_dp
+  !rdt_max_full  = 0.0_dp
+  !qbal_max_full = 0.0_dp
+  !qbal_p95_full = 0.0_dp
+
   !--------------------------------------------
   ! Irradiation update at the SUBSTEP START time
   !--------------------------------------------
   if (.not. use_irradiation .or. L_irr <= Lirr_floor) then
-  !if (.not. use_irradiation) then
      call set_zero_irradiation()
      Qirr_prof(:)  = 0.0_dp
      dYdXi_prof(:) = 0.0_dp
@@ -945,21 +1150,70 @@ logical function substep_try_and_commit(it_out, t_local, dt_nd, source_n, source
   ! TRY step (uses Qirr_prof + shadow_prof)
   !--------------------------------------------
   call evolve_physics_one_substep_try( &
-       dt_nd, &
-       sigma_cur, nu_cur, Tmid_cur, &                   ! input = cur
-       source_n, source_np1, &
-       Qirr_prof, dYdXi_prof, shadow_prof, &            ! ★ NEW
-       sigma_try, nu_try, T_try, H_try, rho_try, kappa_try, tau_try, &
-       Qvis_try, Qrad_try, Qirr_try, dYdXi_try, shadow_try, &
-       kiter_try, miter_try )
+       dt_loc=dt_nd, &
+       sigma_in=sigma_cur, nu_in=nu_cur, T_in=Tmid_cur, &
+       source_n=source_n, source_np1=source_np1, &
+       Qirr_prof_in=Qirr_prof, dYdXi_in=dYdXi_prof, shadow_in=shadow_prof, &
+       sigma_out=sigma_try, nu_out=nu_try, T_out=T_try, H_out=H_try, &
+       rho_out=rho_try, kappa_out=kappa_try, kappa_planck_out=kappa_planck_try, tau_out=tau_try, &
+       Qvis_out=Qvis_try, Qrad_out=Qrad_try, Qirr_out=Qirr_try, &
+       dYdXi_out=dYdXi_try, shadow_out=shadow_try, &
+       kiter_out=kiter_try, miter_out=miter_try, &
+       rQ_rms_out=rQ_rms_sub, rQ_p95_out=rQ_p95_sub, rQ_max_out=rQ_max_sub, &
+       rdt_max_out=rdt_max_sub, rdt_rms_out=rdt_rms_sub, rdt_p95_out=rdt_p95_sub, &
+       qbal_max_out=qbal_max_sub, qbal_p95_out=qbal_p95_sub )
 
-  ok = accept_step_try(nr, kiter_try, sigma_try, nu_try, T_try, Qvis_try, Qrad_try, Qirr_try)
-  if (.not. ok) return
+  !write(*,'(A,1PE11.3,A,1PE11.3,A,I6,A,I6)') &
+  !     'DBG substep: dt=', dt_nd, '  L_irr=', L_irr, '  kiter=', kiter_try, '  miter=', miter_try
+  !write(*,'(A,1PE11.3,A,1PE11.3)') 'DBG substep: rdt_max=', rdt_max_sub, '  rdt_p95=', rdt_p95_sub
+  !write(*,'(A,1PE11.3)') 'DBG substep: max|Qirr|=', maxval(abs(Qirr_try))
+  rdt_max_dbg = rdt_max_sub
+  rdt_p95_dbg = rdt_p95_sub
+  
+  ok = accept_step_try(nr, kiter_try, sigma_try, nu_try, T_try, &
+                       Qvis_try, Qrad_try, Qirr_try, rdt_max_sub, rdt_p95_sub, ireason)
+  if (.not. ok) then
+     ! ensure deterministic outputs on reject
+     rdt_max_sub  = 0.0_dp
+     rdt_rms_sub  = 0.0_dp
+     rdt_p95_sub  = 0.0_dp
+     qbal_max_sub = 0.0_dp
+     qbal_p95_sub = 0.0_dp
+     rQ_rms_sub   = 0.0_dp
+     rQ_p95_sub   = 0.0_dp
+     rQ_max_sub   = 0.0_dp
+     return
+  end if
+  if (.not. ieee_is_finite(rdt_max_sub))  rdt_max_sub  = 0.0_dp
+  if (.not. ieee_is_finite(rdt_rms_sub))  rdt_rms_sub  = 0.0_dp
+  if (.not. ieee_is_finite(rdt_p95_sub))  rdt_p95_sub  = 0.0_dp
+  if (.not. ieee_is_finite(qbal_max_sub)) qbal_max_sub = 0.0_dp
+  if (.not. ieee_is_finite(qbal_p95_sub)) qbal_p95_sub = 0.0_dp
+  if (.not. ieee_is_finite(rQ_rms_sub))   rQ_rms_sub   = 0.0_dp
+  if (.not. ieee_is_finite(rQ_p95_sub))   rQ_p95_sub   = 0.0_dp
+  if (.not. ieee_is_finite(rQ_max_sub))   rQ_max_sub   = 0.0_dp
 
   call commit_step_cur( sigma_try, nu_try, &
-       T_try, H_try, rho_try, kappa_try, tau_try, &
+       T_try, H_try, rho_try, kappa_try, kappa_planck_try, tau_try, &
        Qvis_try, Qrad_try, Qirr_try, dYdXi_try, shadow_try, &
        kiter_try, miter_try )
+
+  ! Update full-step aggregates only if this substep is committed
+  rQ_rms_full = rQ_rms_sub
+  rQ_p95_full = rQ_p95_sub
+  rQ_max_full = rQ_max_sub   
+  rdt_rms_full = rdt_rms_sub
+  rdt_p95_full = rdt_p95_sub
+  rdt_max_full = rdt_max_sub 
+  qbal_max_full = qbal_max_sub
+  qbal_p95_full = qbal_p95_sub
+  !rQ_rms_full = max(rQ_rms_full, rQ_rms_sub)
+  !rQ_p95_full = max(rQ_p95_full, rQ_p95_sub)
+  !rQ_max_full = max(rQ_max_full, rQ_max_sub)       
+  !rdt_rms_full = max(rdt_rms_full, rdt_rms_sub)
+  !rdt_p95_full = max(rdt_p95_full, rdt_p95_sub)
+  !rdt_max_full = max(rdt_max_full, rdt_max_sub)     
+  !!qbal_p95_full = max(qbal_p95_full, qbal_p95_sub)
 
   ! ---- after commit of the substep (ACCEPTED) ----
   ! After commit: update hot-region metrics once (accepted state)
@@ -1028,42 +1282,103 @@ end subroutine smooth_profile_logr
 
 
   logical function accept_step_try(nr, kiter_try, sigma_try, nu_try, T_try, &
-                                   Qvis_try, Qrad_try, Qirr_try) result(ok)
+                                 Qvis_try, Qrad_try, Qirr_try, rdt_max, rdt_p95, ireason) result(ok)
+    use mod_global,  only : use_energy_pde, use_irradiation
+    use irradiation_mod, only : L_irr, Lirr_floor
     use, intrinsic :: ieee_arithmetic
     implicit none
     integer(i4b), intent(in) :: nr
     integer(i4b), intent(in) :: kiter_try
     real(dp),     intent(in) :: sigma_try(nr), nu_try(nr), T_try(nr), &
-                                Qvis_try(nr), Qrad_try(nr), Qirr_try(nr)
-
+                                Qvis_try(nr), Qrad_try(nr), Qirr_try(nr), &
+                                rdt_max, rdt_p95
+                                
     integer(i4b) :: i
     real(dp) :: denom, qscale, qfloor, qactive, res
+    !real(dp) :: dTrel_max, Tref, eps_dTrel
+    integer(i4b) :: n_act
+    real(dp), parameter :: tiny_sigma = 1.0e-8_dp
     real(dp), parameter :: tiny = 1.0e-60_dp
     real(dp), parameter :: eps_Q = 1.0e-2_dp
     real(dp), parameter :: Tmin  = 1.0_dp
     real(dp), parameter :: Tmax  = 1.0e7_dp
+    real(dp), parameter :: rdt_max_allow = 1.0e3_dp
+    real(dp), parameter :: rdt_p95_allow = 3.0e-1_dp
+    integer(i4b), intent(out) :: ireason
 
+    ireason = 0
     ok = .true.
 
-    if (kiter_try == -99) ok = .false.
-
-    do i = 1, nr
-       if (ieee_is_nan(T_try(i)) .or. .not. ieee_is_finite(T_try(i))) ok = .false.
-       if (ieee_is_nan(nu_try(i)) .or. .not. ieee_is_finite(nu_try(i))) ok = .false.
+    ! 0) immediate fail
+    if (kiter_try == -99) then
+       ok = .false.
+       ireason = 1
+       write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+       write (*, '(a, i4)') 'kiter_try = ', kiter_try
+       return
+    end if
+ 
+    ! 1) sanity checks (as you already do)
+    !do i = 1, nr
+    !   if (ieee_is_nan(T_try(i)) .or. .not. ieee_is_finite(T_try(i))) ok = .false.
+    !   if (ieee_is_nan(nu_try(i)) .or. .not. ieee_is_finite(nu_try(i))) ok = .false.
+    !end do
+    do i=1,nr
+       if (.not. ieee_is_finite(T_try(i))) then
+          ok = .false.
+          ireason = 2
+          write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+          write (*, '(a, i4, a, 1pe13.4)') 'T_try(', i, ') =', T_try(i)
+          return
+       end if
+       if (.not. ieee_is_finite(nu_try(i))) then
+          ok = .false.
+          ireason = 3
+          write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+          write (*, '(a, i4, a, 1pe13.4)') 'nu_try(', i, ') =', nu_try(i)
+          return
+       end if
     end do
-
+ 
     ! Reject a "zero structure" solution if Sigma is non-trivial
     if (maxval(sigma_try) > tiny) then
-       if (maxval(T_try) <= 0.0_dp) ok = .false.
-       if (maxval(nu_try) <= 0.0_dp) ok = .false.
+       if (maxval(T_try) <= 0.0_dp) then
+          ok = .false.
+          ireason = 4
+          write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+          write (*, '(a, 1pe13.4, a, 1pe13.4)') 'maxval(sigma_try) =', maxval(sigma_try), &
+                 'maxval(T_try) =', maxval(T_try)
+          return
+       end if
+       if (maxval(nu_try) <= 0.0_dp) then
+          ok = .false.
+          ireason = 5
+          write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+          write (*, '(a, 1pe13.4, a, 1pe13.4)') 'maxval(sigma_try) =', maxval(sigma_try), &
+                 'maxval(nu_try) =', maxval(nu_try)
+          return
+       end if
+    end if
+ 
+    ! rdt check bypassed (rdt_max, rdt_p95 still passed for diagnostics; no reject)
+    if (.not. ieee_is_finite(rdt_p95) .or. rdt_p95 > rdt_p95_allow) then
+      ok = .false.
+      ireason = 6
+      write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+      write (*, '(a, 1pe13.4)') 'rdt_p95 =', rdt_p95
+      return
+    end if
+    if (.not. ieee_is_finite(rdt_max) .or. rdt_max > rdt_max_allow) then
+       ok = .false.
+       ireason = 7
+       write(*, '(a, i2)') 'FAIL accept_step_try reason =', ireason
+       write (*, '(a, 1pe13.4)') 'rdt_max =', rdt_max
+        return
     end if
 
-    !-----------------------------------------------------------------
-    ! 3) thermal balance residual (robust)
-    !   Evaluate only where heating/cooling is "active".
-    !-----------------------------------------------------------------
-    ! A reference floor to avoid divide-by-tiny in near-vacuum cells.
-    ! You can start conservative and tune:
+    ! 3) thermal balance residual: keep as diagnostic only (DO NOT reject)
+    !    A reference floor to avoid divide-by-tiny in near-vacuum cells.
+    !    You can start conservative and tune:
     qfloor  = 1.0e-30_dp   ! [same units as Q*]; will be overridden by max below
 
     ! "Active" threshold: below this, skip the relative-residual test.
@@ -1085,19 +1400,19 @@ end subroutine smooth_profile_logr
 
        res = abs( (Qvis_try(i) + Qirr_try(i)) - Qrad_try(i) ) / denom
 
-       if (res > eps_Q) then
-          !!ok = .false.
-          !write(*,'("i=",i4,"  res=",1pe12.4,"  Qvis=",1pe12.4, &
-          !        "  Qirr=",1pe12.4,"  Qrad=",1pe12.4)') i, res, &
-          !        Qvis_try(i), Qirr_try(i), Qrad_try(i)
-       end if
+       !if (.not. use_energy_pde .and. res > eps_Q) then
+       !   !ok = .false.
+       !   write(*,'("i=",i4,"  res=",1pe12.4,"  Qvis=",1pe12.4, &
+       !           "  Qirr=",1pe12.4,"  Qrad=",1pe12.4)') i, res, &
+       !           Qvis_try(i), Qirr_try(i), Qrad_try(i)
+       !end if
     end do
 
   end function accept_step_try
 
 
   subroutine commit_step(it, sigma_try, nu_try, &
-                         T_try, H_try, rho_try, kappa_try, tau_try, &
+                         T_try, H_try, rho_try, kappa_try, kappa_planck_try, tau_try, &
                          Qvis_try, Qrad_try, Qirr_try, dYdXi_try, shadow_try, &
                          kiter_try, miter_try)
     use mod_global, only : nr, sigmat, nu, nu_conv, k_iter, m_iter
@@ -1106,7 +1421,7 @@ end subroutine smooth_profile_logr
 
     integer(i4b), intent(in) :: it
     real(dp),     intent(in) :: sigma_try(nr), nu_try(nr)
-    real(dp),     intent(in) :: T_try(nr), H_try(nr), rho_try(nr), kappa_try(nr), tau_try(nr)
+    real(dp),     intent(in) :: T_try(nr), H_try(nr), rho_try(nr), kappa_try(nr), kappa_planck_try(nr), tau_try(nr)
     real(dp),     intent(in) :: Qvis_try(nr), Qrad_try(nr), Qirr_try(nr), dYdXi_try(nr)
     logical,      intent(in) :: shadow_try(nr)
     integer(i4b), intent(in) :: kiter_try, miter_try
@@ -1122,22 +1437,22 @@ end subroutine smooth_profile_logr
     m_iter(itp1)    = miter_try
 
     call commit_structure_to_global( itp1, &
-         T_try, H_try, rho_try, kappa_try, tau_try, &
+         T_try, H_try, rho_try, kappa_try, kappa_planck_try, tau_try, &
          Qvis_try, Qrad_try, Qirr_try, dYdXi_try, shadow_try, nu_try, miter_try )
 
   end subroutine commit_step
 
   subroutine commit_step_cur(sigma_try, nu_try, &
-                           T_try, H_try, rho_try, kappa_try, tau_try, &
+                           T_try, H_try, rho_try, kappa_try, kappa_planck_try, tau_try, &
                            Qvis_try, Qrad_try, Qirr_try, dYdXi_try, shadow_try, &
                            kiter_try, miter_try)
     use mod_global, only : nr, sigma_cur, Tmid_cur, nu, nu_cur, k_iter_cur, &
-                         m_iter_cur, H_cur, rho_cur, kappa_cur, tau_cur, &
+                         m_iter_cur, H_cur, rho_cur, kappa_cur, kappa_planck_cur, tau_cur, &
                          Qvis_cur, Qrad_cur, Qirr_cur, dYdXi_cur, shadow_cur
     implicit none
 
     real(dp), intent(in) :: sigma_try(nr), nu_try(nr)
-    real(dp), intent(in) :: T_try(nr), H_try(nr), rho_try(nr), kappa_try(nr), tau_try(nr)
+    real(dp), intent(in) :: T_try(nr), H_try(nr), rho_try(nr), kappa_try(nr), kappa_planck_try(nr), tau_try(nr)
     real(dp), intent(in) :: Qvis_try(nr), Qrad_try(nr), Qirr_try(nr), dYdXi_try(nr)
     logical,  intent(in) :: shadow_try(nr)
     integer(i4b), intent(in) :: kiter_try, miter_try
@@ -1153,6 +1468,7 @@ end subroutine smooth_profile_logr
     H_cur(:)        = H_try(:)
     rho_cur(:)      = rho_try(:)
     kappa_cur(:)    = kappa_try(:)
+    kappa_planck_cur(:) = kappa_planck_try(:)
     tau_cur(:)      = tau_try(:)
     Qvis_cur(:)     = Qvis_try(:)
     Qrad_cur(:)     = Qrad_try(:)
@@ -1165,14 +1481,16 @@ end subroutine smooth_profile_logr
 
   subroutine energy_pde_step_try( n, r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_prof, &
                                 dt_phys, T_old, &
-                                T_new, H_new, rho_new, kappa_new, tau_new, &
+                                T_new, H_new, rho_new, kappa_new, kappa_planck_new, tau_new, &
                                 Qvis_new, Qrad_new, Qirr_new, &
-                                nu_nd_new, converged )
+                                nu_nd_new, converged, &
+                                rdt_max, rdt_rms, rdt_p95, qbal_max, qbal_p95 )
     use kind_params, only : dp, i4b
     use constants,   only : kb, mp, mu
     use mod_global,  only : nu0_dim, nu0_nd
     use radiation_params_mod, only : T_floor, T_ceiling
     use disk_thermal_mod, only : heating_cooling_cell
+    use disk_energy_mod, only : stats_max_rms_p95, stats_max_p95
     use disk_energy_pde_mod, only : apply_radial_Tdiff_implicit
     use, intrinsic :: ieee_arithmetic
     implicit none
@@ -1184,17 +1502,25 @@ end subroutine smooth_profile_logr
     real(dp),     intent(in)  :: dt_phys
     real(dp),     intent(in)  :: T_old(n)
 
-    real(dp),     intent(out) :: T_new(n), H_new(n), rho_new(n), kappa_new(n), tau_new(n)
+    real(dp),     intent(out) :: T_new(n), H_new(n), rho_new(n), kappa_new(n), kappa_planck_new(n), tau_new(n)
     real(dp),     intent(out) :: Qvis_new(n), Qrad_new(n), Qirr_new(n)
     real(dp),     intent(out) :: nu_nd_new(n)
     logical,      intent(out) :: converged
+    real(dp), intent(out), optional :: rdt_max, rdt_rms, rdt_p95
+    real(dp), intent(out), optional :: qbal_max, qbal_p95
 
-    integer(i4b) :: i, iter
-    real(dp) :: cv, sigcv, Told, T, Hloc, rholoc, nudim, kap, tau
+    integer(i4b) :: i, iter, n_zero
+    integer(i4b) :: n_act
+    real(dp) :: cv, sigcv, Told, Told_i, T, Hloc, rholoc, nudim, kap, kapP, tau
     real(dp) :: Qv, Qi, Qm
     real(dp) :: R, Rp, dRdT, dT, eps
     real(dp) :: Rdt_over_T, dTrel, Qbal
+    real(dp) :: rmax, rrms, rp95, qref, qmax, qp95
     real(dp) :: T_tmp(n), H_tmp(n), rho_tmp(n), kappa_tmp(n)
+    real(dp) :: T_star(n)   ! T before diffusion step (local ODE solution)
+    real(dp), allocatable :: rdt_list(:), qbal_list(:)
+    real(dp) :: R_final, Qbal_final, sigcv_i, Tref, D_flux_i
+    real(dp), parameter :: tiny_qref = 1.0e-99_dp
     logical  :: active(n)
     logical  :: cell_ok
 
@@ -1204,6 +1530,9 @@ end subroutine smooth_profile_logr
     real(dp),    parameter :: tiny_tau = 1.0e-6_dp
     real(dp), parameter :: tol_dT = 1.0e-3_dp
     real(dp), parameter :: tol_Rdt = 1.0e-3_dp   ! tolerance for |R|*dt/T
+
+    integer :: n_fail
+    integer, parameter :: n_fail_allow = 3   ! 1-5
 
     ! For ideal monoatomic gas gamma=5/3:
     ! cV = (3/2) kB / (mu mp)
@@ -1215,14 +1544,16 @@ end subroutine smooth_profile_logr
     H_new(:)     = 0.0_dp
     rho_new(:)   = 0.0_dp
     kappa_new(:) = 0.0_dp
+    kappa_planck_new(:) = 0.0_dp
     tau_new(:)   = 0.0_dp
     Qvis_new(:)  = 0.0_dp
     Qrad_new(:)  = 0.0_dp
     Qirr_new(:)  = 0.0_dp
     nu_nd_new(:) = 0.0_dp
 
+    n_fail = 0
     do i = 1, n
-
+    
        if (Sigma_cgs(i) <= tiny_sigma .or. OmegaK_cgs(i) <= 0.0_dp .or. r_cgs(i) <= 0.0_dp) then
           T_tmp(i)     = 0.0_dp
           H_tmp(i)     = 0.0_dp
@@ -1231,105 +1562,83 @@ end subroutine smooth_profile_logr
           active(i)    = .false.
           cycle
        end if
-
+    
        sigcv = max(Sigma_cgs(i) * cv, tiny)
-
+    
        Told = T_old(i)
        if (Told <= 0.0_dp) Told = T_floor
        Told = max(T_floor, min(Told, T_ceiling))
-
-       !-----------------------------------------
-       ! Newton for implicit Euler residual:
-       ! R(T) = (T - Told)/dt - (Qv(T) + Qirr - Qm(T)) / (Sigma*cV)
-       !-----------------------------------------
+    
        T = Told
-
        cell_ok = .false.
+    
        do iter = 1, iter_max
-
-          call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), T, &
-                                 Hloc, rholoc, nudim, kap, tau, Qv, Qi, Qm, &
-                                 Qirr_in=Qirr_prof(i) )
-
+          call heating_cooling_cell(r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), T, &
+                                    Hloc, rholoc, nudim, kap, kapP, tau, Qv, Qi, Qm, &
+                                    Qirr_in=Qirr_prof(i))
+    
           if (tau < tiny_tau) then
-             !-----------------------------------------
-             ! Optically thin fallback:
-             ! Do NOT treat this as Newton convergence.
-             ! Freeze temperature to a safe value and
-             ! accept this cell without Newton iteration.
-             !-----------------------------------------
              T = max(T_floor, Told)
              cell_ok = .true.
              exit
           end if
-
-          R  = (T - Told)/max(dt_phys,tiny) - ( (Qv + Qi - Qm) / sigcv )
-          eps  = max(1.0e-2_dp * max(T, T_floor), 1.0_dp)
-
-          call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), T+eps, &
-                                 Hloc, rholoc, nudim, kap, tau, Qv, Qi, Qm, &
-                                 Qirr_in=Qirr_prof(i) )
-
-          Rp = ( (T+eps) - Told)/max(dt_phys,tiny) - ( (Qv + Qi - Qm) / sigcv )
-
-          dRdT = (Rp - R) / max(eps, tiny)
-          if (abs(dRdT) < tiny) exit   ! derivative failure -> treat as not converged
-
-          dT = -R / dRdT
-
-          ! Simple line-search damping: keep the step bounded and inside temperature limits
+    
+          R   = (T - Told)/max(dt_phys,tiny) - ((Qv + Qi - Qm)/sigcv)
+          eps = max(1.0e-2_dp * max(T, T_floor), 1.0_dp)
+    
+          call heating_cooling_cell(r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), T+eps, &
+                                    Hloc, rholoc, nudim, kap, kapP, tau, Qv, Qi, Qm, &
+                                    Qirr_in=Qirr_prof(i))
+    
+          Rp   = ((T+eps) - Told)/max(dt_phys,tiny) - ((Qv + Qi - Qm)/sigcv)
+          dRdT = (Rp - R)/max(eps, tiny)
+          if (abs(dRdT) < tiny) exit
+    
+          dT = -R/dRdT
           dT = max(min(dT, 0.5_dp*max(T, T_floor)), -0.5_dp*max(T, T_floor))
-          T  = T + dT
-          T  = max(T_floor, min(T, T_ceiling))
-
+          T  = max(T_floor, min(T + dT, T_ceiling))
+    
           if (.not. ieee_is_finite(T)) exit
-
+    
           Rdt_over_T = abs(R) * dt_phys / max(abs(T), 1.0_dp)
-          dTrel = abs(dT)  /max(abs(T), 1.0_dp)
-          Qbal = Qv + Qi - Qm
-          !if (i > n - 30) then
-          !   write (*, '("i =", i4, ", iter =", i3, ":")') i, iter
-          !   write (*, '(3x, "Rdt_over_T =", 1pe12.4, ", dTrel =", 1pe12.4, &
-          !          ", Qbal =", 1pe12.4)') Rdt_over_T, dTrel, Qbal
-          !end if
-          if ( abs(dT)/max(abs(T),1.0_dp) < tol_dT .and. Rdt_over_T < tol_Rdt ) then
+          if (abs(dT)/max(abs(T),1.0_dp) < tol_dT .and. Rdt_over_T < tol_Rdt) then
              cell_ok = .true.
-             !if (i > n - 30) then
-             !   write (*, '(3x, "-> Converged after ", i3, " iterations")') iter
-             !end if
              exit
           end if
-
        end do
-
+    
        if (.not. cell_ok) then
-          converged = .false.
-          return
+          n_fail = n_fail + 1
+          if (n_fail > n_fail_allow) then
+             converged = .false.
+             return
+          end if
+    
+          ! fallback: freeze to previous temperature
+          T = Told
        end if
-
+    
+       ! ---- commit this cell's pre-diffusion state (ONE place) ----
        T_tmp(i) = T
-
-       ! Call this subroutine to obtain coefficients of diffusion constant
-       call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), &
-                                shadow(i), T_tmp(i), &
-                                Hloc, rholoc, nudim, kap, tau, Qv, Qi, Qm, &
-                                Qirr_in=Qirr_prof(i) )
-
+       active(i) = .true.
+    
+       call heating_cooling_cell(r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), T_tmp(i), &
+                                 Hloc, rholoc, nudim, kap, kapP, tau, Qv, Qi, Qm, &
+                                 Qirr_in=Qirr_prof(i))
+    
        H_tmp(i)     = Hloc
        rho_tmp(i)   = rholoc
        kappa_tmp(i) = kap
-
-       ! Cells to inhibit diffusion
-       if (Sigma_cgs(i) <= tiny_sigma) then
+    
+       ! Cells to inhibit diffusion (run for both normal and fallback)
+       if (Sigma_cgs(i) <= tiny_sigma .or. tau < tiny_tau) then
           H_tmp(i)     = 0.0_dp
           kappa_tmp(i) = 0.0_dp
        end if
-       if (tau < tiny_tau) then
-          H_tmp(i)     = 0.0_dp
-          kappa_tmp(i) = 0.0_dp
-       end if
+    
     end do
 
+    T_star(:) = T_tmp(:)   ! save pre-diffusion state for full residual
     call apply_radial_Tdiff_implicit( &
                     n         = n,       &
                     dt        = dt_phys, &
@@ -1341,11 +1650,17 @@ end subroutine smooth_profile_logr
                     T_inout   = T_tmp)
 
     do i = 1, n
+       !if (i==1) then
+       !  write(*,'(A,1PE11.3,A,1PE11.3,A,1PE11.3)') 'DBG pde guards: minSigma=', minval(Sigma_cgs), &
+       !       '  minOmegaK=', minval(OmegaK_cgs), '  minr=', minval(r_cgs)
+       !  write(*,'(A,1PE11.3)') 'DBG pde guards: tiny_sigma=', tiny_sigma
+       !end if
        if (Sigma_cgs(i) <= tiny_sigma .or. OmegaK_cgs(i) <= 0.0_dp .or. r_cgs(i) <= 0.0_dp) then
           T_new(i)     = 0.0_dp
           H_new(i)     = 0.0_dp
           rho_new(i)   = 0.0_dp
           kappa_new(i) = 0.0_dp
+          kappa_planck_new(i) = 0.0_dp
           tau_new(i)   = 0.0_dp
           Qvis_new(i)  = 0.0_dp
           Qrad_new(i)  = 0.0_dp
@@ -1354,15 +1669,21 @@ end subroutine smooth_profile_logr
           cycle
        end if
 
+       ! ---- per-cell old temperature ----
+       Told_i = T_old(i)
+       if (Told_i <= 0.0_dp) Told_i = T_floor
+       Told_i = max(T_floor, min(Told_i, T_ceiling))
+    
        T_new(i) = max(T_floor, min(T_tmp(i), T_ceiling))
 
        call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), T_new(i), &
-                             Hloc, rholoc, nudim, kap, tau, Qv, Qi, Qm, &
+                             Hloc, rholoc, nudim, kap, kapP, tau, Qv, Qi, Qm, &
                              Qirr_in=Qirr_prof(i) )
 
        H_new(i)     = Hloc
        rho_new(i)   = rholoc
        kappa_new(i) = kap
+       kappa_planck_new(i) = kapP
        tau_new(i)   = tau
        Qvis_new(i)  = Qv
        Qrad_new(i)  = Qm
@@ -1374,33 +1695,86 @@ end subroutine smooth_profile_logr
           nu_nd_new(i) = 0.0_dp
        end if
 
+       ! --- build residual lists for diagnostics (final state) ---
+       if (present(rdt_max) .or. present(rdt_rms) .or. present(rdt_p95) .or. &
+          present(qbal_max) .or. present(qbal_p95)) then
+          if (.not. allocated(rdt_list)) then
+             allocate(rdt_list(n))
+             allocate(qbal_list(n))
+          end if
+       end if
+
+       Qbal_final = Qv + Qi - Qm
+       sigcv_i = max(Sigma_cgs(i) * cv, tiny)
+       ! Full PDE residual: R = dT/dt - Q/(Sigma*cV) - D_flux
+       !   D_flux = (T_new - T_star)/dt from the diffusion step
+       !   R_full = (T_new - Told_i)/dt - Qbal/sigcv - (T_new - T_star)/dt
+       !          = (T_star - Told_i)/dt - Qbal/sigcv  (splitting residual)
+       D_flux_i = (T_new(i) - T_star(i))/max(dt_phys,tiny)
+       R_final = (T_new(i) - Told_i)/max(dt_phys,tiny) - (Qbal_final / sigcv_i) - D_flux_i
+       
+       Tref = max(abs(T_new(i)), 1.0_dp)
+       rdt_list(i) = abs(R_final) * dt_phys / Tref
+       
+       ! qref: use heating scale or cooling scale (robust)
+       qref = max(abs(Qv + Qi), abs(Qm), tiny_qref)
+       qbal_list(i) = abs(Qbal_final) / qref
+       
+    end do
+    !n_zero = count( Sigma_cgs <= tiny_sigma .or. OmegaK_cgs <= 0.0_dp .or. r_cgs <= 0.0_dp )
+    !write(*,'(A,I0,A,I0)') 'DBG pde guards: n_zero=', n_zero, ' / n=', n
+    
+    n_act = 0
+    do i=1,n
+       if (Sigma_cgs(i) <= tiny_sigma .or. OmegaK_cgs(i) <= 0.0_dp .or. r_cgs(i) <= 0.0_dp) cycle
+       n_act = n_act + 1
+       rdt_list(n_act)  = rdt_list(i)
+       qbal_list(n_act) = qbal_list(i)
     end do
 
+    if (n_act == 0) then
+       if (present(rdt_max)) rdt_max = 0.0_dp
+       if (present(rdt_rms)) rdt_rms = 0.0_dp
+       if (present(rdt_p95)) rdt_p95 = 0.0_dp
+       if (present(qbal_max)) qbal_max = 0.0_dp
+       if (present(qbal_p95)) qbal_p95 = 0.0_dp
+    else
+       call stats_max_rms_p95(rdt_list, n_act, rmax, rrms, rp95)
+       if (present(rdt_max)) rdt_max = rmax
+       if (present(rdt_rms)) rdt_rms = rrms
+       if (present(rdt_p95)) rdt_p95 = rp95
+    
+       call stats_max_p95(qbal_list, n_act, qmax, qp95)
+       if (present(qbal_max)) qbal_max = qmax
+       if (present(qbal_p95)) qbal_p95 = qp95
+    end if
+    
   end subroutine energy_pde_step_try
 
 
   !-----------------------------------------------------------------
   subroutine compute_local_structure(r_cgs, Sigma_cgs, OmegaK_cgs, TT, &
-                                     H_out, rho_out, nu_out, kappa_out, tau_out)
+                                     H_out, rho_out, nu_out, kappa_out, kappa_planck_out, tau_out)
     !! Fallback structure computation at given TT (no root find).
     !!
     !! This is your compute_local_structure_be, but in generic naming.
     use constants, only : kb, mu, mp
     use mod_global, only : kappa0, kappa_es, alphaSS
     use opacity_table_mod, only : opacity_tables, findkappa_OP_AES_S03, &
-                                findkappa_OP_S03, findkappa_OP_F05_S03
+                                findkappa_OP_S03, findkappa_OP_F05_S03, get_opacity_Planck_rhoT
     use radiation_params_mod, only : T_floor, T_ceiling
     implicit none
 
     real(dp), intent(in)  :: r_cgs, Sigma_cgs, OmegaK_cgs, TT
-    real(dp), intent(out) :: H_out, rho_out, nu_out, kappa_out, tau_out
+    real(dp), intent(out) :: H_out, rho_out, nu_out, kappa_out, kappa_planck_out, tau_out
     real(dp) :: cs2, rho_mid, kappa_ff, kappa_tab, T_loc
-    integer(i4b) :: ierror_kap
+    integer(i4b) :: ierror_kap, ierr_p
 
     if (OmegaK_cgs <= 0.0_dp .or. Sigma_cgs <= 0.0_dp) then
         H_out     = 0.0_dp
        rho_out   = 0.0_dp
        kappa_out = 0.0_dp
+       kappa_planck_out= 0.0_dp
        nu_out    = 0.0_dp
        tau_out   = 0.0_dp
        return
@@ -1428,6 +1802,9 @@ end subroutine smooth_profile_logr
     else
        kappa_out = kappa_tab
     end if
+
+    call get_opacity_Planck_rhoT(rho_mid, T_loc, kappa_planck_out, ierr_p)
+    if (ierr_p /= 0) kappa_planck_out = kappa_out
 
     tau_out = 0.5_dp * kappa_out * Sigma_cgs
     nu_out  = alphaSS * cs2 / OmegaK_cgs
@@ -1491,7 +1868,7 @@ end subroutine smooth_profile_logr
     use kind_params,  only : dp, i4b
     use constants,    only : kb, mp, mu
     use mod_global,   only : Teff_star, Tmid, R_star, H, rho, &
-                             kappaR, tauR, nu0_dim, nu0_nd, nu_conv, &
+                             kappaR, kappa_planck, tauR, nu0_dim, nu0_nd, nu_conv, &
                              use_irradiation, use_be_decretion
     use units_disk_mod, only : r_dim, sigma_dim, omegaK_dim, sigma_nd
     implicit none
@@ -1503,7 +1880,7 @@ end subroutine smooth_profile_logr
     integer(i4b) :: i, i_cap_start
     real(dp) :: T_iso
     real(dp) :: r_cgs, Sigma_cgs, OmegaK_cgs
-    real(dp) :: H_loc, rho_loc, kappa_loc, tau_loc, nu_dim_loc
+    real(dp) :: H_loc, rho_loc, kappa_loc, kappa_planck_loc, tau_loc, nu_dim_loc
     real(dp), parameter :: tiny_sigma = 1.0e-8_dp  ! keep consistent with caller
     real(dp), parameter :: cap_tau_thresh = 4.0_dp / 3.0_dp
     real(dp), parameter :: cap_Teff_factor = 0.6_dp
@@ -1540,11 +1917,12 @@ end subroutine smooth_profile_logr
        Tmid(itp1,i) = T_iso
 
        call compute_local_structure(r_cgs, Sigma_cgs, OmegaK_cgs, T_iso, &
-                                  H_loc, rho_loc, nu_dim_loc, kappa_loc, tau_loc)
+                                  H_loc, rho_loc, nu_dim_loc, kappa_loc, kappa_planck_loc, tau_loc)
 
        H(itp1,i)      = H_loc
        rho(itp1,i)    = rho_loc
        kappaR(itp1,i) = kappa_loc
+       kappa_planck(itp1,i)= kappa_planck_loc
        tauR(itp1,i)   = tau_loc
 
        if (nu0_dim > 0.0_dp) then
@@ -1556,5 +1934,98 @@ end subroutine smooth_profile_logr
        nu_conv(itp1,i) = nu_new(i)
     end do
   end subroutine apply_outer_isothermal_cap
+
+subroutine compute_relerr_stats_qirr(n, Sigma, Qprof, Qcalc, Qfloor, &
+                                     rms, p95, emax, work, nwork)
+  use kind_params, only: dp, i4b
+  implicit none
+  integer(i4b), intent(in) :: n
+  real(dp), intent(in) :: Sigma(n), Qprof(n), Qcalc(n), Qfloor
+  real(dp), intent(out) :: rms, p95, emax
+  real(dp), allocatable, intent(inout) :: work(:)
+  integer(i4b), intent(inout) :: nwork
+
+  integer(i4b) :: i, k95, m
+  real(dp) :: qref, eps, s2
+  integer(i4b), parameter :: tiny_sig_mask = 1
+
+  ! Count valid cells
+  m = 0
+  do i = 1, n
+     if (Sigma(i) <= 1.0e-8_dp) cycle
+     if (abs(Qprof(i)) < Qfloor .and. abs(Qcalc(i)) < Qfloor) cycle
+     m = m + 1
+  end do
+
+  if (m <= 0) then
+     rms = 0.0_dp; p95 = 0.0_dp; emax = 0.0_dp
+     return
+  end if
+
+  ! Ensure work array capacity
+  if (.not. allocated(work)) then
+     allocate(work(m))
+     nwork = m
+  else if (size(work) < m) then
+     deallocate(work)
+     allocate(work(m))
+     nwork = m
+  end if
+
+  ! Fill eps list
+  s2   = 0.0_dp
+  emax = 0.0_dp
+  m = 0
+  do i = 1, n
+     if (Sigma(i) <= 1.0e-8_dp) cycle
+     if (abs(Qprof(i)) < Qfloor .and. abs(Qcalc(i)) < Qfloor) cycle
+
+     qref = max(abs(Qprof(i)), abs(Qcalc(i)), Qfloor)
+     eps  = abs(Qcalc(i) - Qprof(i)) / qref
+
+     m = m + 1
+     work(m) = eps
+     s2      = s2 + eps*eps
+     emax    = max(emax, eps)
+  end do
+
+  rms = sqrt(s2 / real(m,dp))
+
+  ! 95th percentile: value at index floor(0.95*m)
+  call sort_real_dp(work, m)
+  k95 = int(0.95_dp * real(m,dp))
+  k95 = max(1, min(m, k95))
+  p95 = work(k95)
+end subroutine compute_relerr_stats_qirr
+
+
+subroutine sort_real_dp(a, n)
+  use kind_params, only: dp, i4b
+  implicit none
+  integer(i4b), intent(in) :: n
+  real(dp), intent(inout) :: a(n)
+  call quicksort_real_dp(a, 1, n)
+contains
+  recursive subroutine quicksort_real_dp(x, lo, hi)
+    real(dp), intent(inout) :: x(:)
+    integer(i4b), intent(in) :: lo, hi
+    integer(i4b) :: i, j
+    real(dp) :: pivot, tmp
+    if (lo >= hi) return
+    pivot = x((lo+hi)/2)
+    i = lo; j = hi
+    do
+       do while (x(i) < pivot); i = i + 1; end do
+       do while (x(j) > pivot); j = j - 1; end do
+       if (i <= j) then
+          tmp = x(i); x(i) = x(j); x(j) = tmp
+          i = i + 1; j = j - 1
+       end if
+       if (i > j) exit
+    end do
+    if (lo < j) call quicksort_real_dp(x, lo, j)
+    if (i < hi) call quicksort_real_dp(x, i, hi)
+  end subroutine quicksort_real_dp
+end subroutine sort_real_dp
 
 end module evolve_try_mod

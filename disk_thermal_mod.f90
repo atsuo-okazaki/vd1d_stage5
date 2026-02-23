@@ -31,7 +31,7 @@ contains
 
   subroutine heating_cooling_cell( r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Tmid, &
                                  H_loc, rho_loc, nu_dim_loc, kappa_loc,        &
-                                 tau_loc, Qplus_visc, Qplus_irr, Qminus,       &
+                                 kap_planck_loc, tau_loc, Qplus_visc, Qplus_irr, Qminus, &
                                  Qirr_in )
     use,intrinsic :: iso_fortran_env
     use, intrinsic :: ieee_arithmetic
@@ -40,11 +40,11 @@ contains
     real(dp), intent(in)  :: r_cgs, Sigma_cgs, OmegaK_cgs, Tmid
     real(dp), intent(in), optional :: Qirr_in
     logical,  intent(in)  :: shadow
-    real(dp), intent(out) :: H_loc, rho_loc, nu_dim_loc, kappa_loc
+    real(dp), intent(out) :: H_loc, rho_loc, nu_dim_loc, kappa_loc, kap_planck_loc
     real(dp), intent(out) :: tau_loc, Qplus_visc, Qplus_irr, Qminus
 
     ! Local variables
-    real(dp) :: T_loc, cs2, kappa_ff, kappa_tab, kappaP_loc
+    real(dp) :: T_loc, cs2, kappa_ff, kappa_tab
     real(dp) :: logR_loc, rho_use, T_use, logR
     real(dp) :: F_irr, cos_geom, cos_star, cos_inc
     real(dp) :: Q_thick, Q_thin, w
@@ -61,6 +61,7 @@ contains
     rho_loc    = transfer(-1_int64,0.0_real64)
     nu_dim_loc = transfer(-1_int64,0.0_real64)
     kappa_loc  = transfer(-1_int64,0.0_real64)
+    kap_planck_loc = transfer(-1_int64,0.0_real64)
     tau_loc    = transfer(-1_int64,0.0_real64)
     Qplus_visc = transfer(-1_int64,0.0_real64)
     Qplus_irr  = transfer(-1_int64,0.0_real64)
@@ -76,6 +77,7 @@ contains
        rho_loc    = 0.0_dp
        nu_dim_loc = 0.0_dp
        kappa_loc  = 0.0_dp
+       kap_planck_loc = 0.0_dp
        tau_loc   = 0.0_dp
        Qplus_visc = 0.0_dp
        Qplus_irr  = 0.0_dp
@@ -127,8 +129,8 @@ contains
     tau_loc = 0.5_dp * kappa_loc * Sigma_cgs
 
     ! Planck mean for optically thin cooling (D'Alessio: Q_rad thin ∝ κ_P)
-    call get_opacity_Planck_rhoT(rho_loc, T_loc, kappaP_loc, ierror)
-    kappaP_loc = max(kappaP_loc, kappa_floor)
+    call get_opacity_Planck_rhoT(rho_loc, T_loc, kap_planck_loc, ierror)
+    kap_planck_loc = max(kap_planck_loc, kappa_floor)
 
     !-----------------------------
     ! 3. Heating and cooling rates
@@ -164,7 +166,7 @@ contains
 
     ! Viscous heating rate and radiative cooling rate
     call Qvis_and_Qrad_KFM2008(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                       kappa_loc, kappaP_loc, tau_loc, Qplus_visc, Qminus)
+                       kappa_loc, kap_planck_loc, tau_loc, Qplus_visc, Qminus)
 
     !-----------------------------
     ! 5. Sanity check
@@ -208,7 +210,7 @@ contains
   end subroutine build_shadow_flags
 
 subroutine Qvis_and_Qrad_KFM2008(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                                kappaR_loc, kappaP_loc, tauR_loc, Qvis_loc, Qrad_loc)
+                                kappaR_loc, kap_planck_loc, tauR_loc, Qvis_loc, Qrad_loc)
   !-----------------------------------------------------------------------
   ! Compute viscous heating Qvis and radiative cooling Qrad (per unit area)
   ! using coefficients consistent with Kato, Fukue & Mineshige (2008).
@@ -229,7 +231,7 @@ subroutine Qvis_and_Qrad_KFM2008(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc
   implicit none
 
   real(dp), intent(in)  :: r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc
-  real(dp), intent(in)  :: kappaR_loc, kappaP_loc, tauR_loc
+  real(dp), intent(in)  :: kappaR_loc, kap_planck_loc, tauR_loc
   real(dp), intent(out) :: Qvis_loc, Qrad_loc
 
   logical,  parameter   :: use_bridging = .true.
@@ -238,38 +240,44 @@ subroutine Qvis_and_Qrad_KFM2008(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc
   real(dp), parameter   :: tiny_kap     = 1.0e-99_dp
   real(dp), parameter   :: tiny_q       = 1.0e-99_dp
 
-  real(dp) :: sig_eff, kap_eff, kapP_eff, tau_eff
-  real(dp) :: Q_thick, Q_thin, w
-
+  real(dp) :: sig_eff, kap_eff, kapP_eff
+  real(dp) :: tauR_eff, tauP_eff
+  real(dp) :: Q_thick, Q_thin
+  real(dp) :: kappaP_abs   ! Planck mean (absorption only)
+  real(dp) :: kappaR_tot   ! Rosseland mean (absorption + scattering)
+  
   !--- Safety: enforce non-negative / non-singular inputs locally
   sig_eff = max(Sigma_cgs, tiny_sig)
   kap_eff = max(kappaR_loc, tiny_kap)
-  kapP_eff = max(kappaP_loc, tiny_kap)
+  kapP_eff = max(kap_planck_loc, tiny_kap)
 
-  ! If tauR_loc is passed inconsistently, you can override with this:
-  ! tau_eff = 0.5_dp * kap_eff * sig_eff
-  tau_eff = max(tauR_loc, 0.0_dp)
+  ! --- Optical depths (one-side)
+  ! tauR: transport optical depth (Rosseland mean; include scattering in kappaR_loc upstream if desired)
+  tauR_eff = 0.5_dp * kap_eff  * sig_eff
+
+  ! tauP: absorption/emission optical depth (Planck mean; MUST be true absorption only)
+  tauP_eff = 0.5_dp * kapP_eff * sig_eff
 
   !--- Viscous heating (KFM2008 Eq. 3.34 as cited in your code)
   Qvis_loc = 9.0_dp / 4.0_dp * nu_dim_loc * sig_eff * OmegaK_cgs**2
 
-  !--- Radiative cooling (KFM2008 Eq. 3.38 as cited in your code)
-  ! Optically thick (diffusion-like; uses Rosseland mean)
+  ! Optically thick diffusion limit (uses Rosseland mean)
   Q_thick = 64.0_dp * sbc * T_loc**4 / (3.0_dp * kap_eff * sig_eff)
 
-  ! Optically thin limit: Planck mean for emission (D'Alessio: Q_rad ∝ κ_P Σ σT⁴)
+  ! Optically thin emission limit (uses Planck mean absorption)
   Q_thin  = 2.0_dp * kapP_eff * sig_eff * sbc * T_loc**4
 
   !--- Combine thick/thin (bridging or sharp switch)
   if (use_bridging) then
-     ! Smooth transition weight based on one-side optical depth tau = kappa*Sigma/2
-     w = tau_eff / (1.0_dp + tau_eff)
-
-     ! Harmonic blend with weight (robust when one branch is very small)
-     Qrad_loc = 1.0_dp / ( (1.0_dp - w) / max(Q_thin,  tiny_q) &
-                         + (      w) / max(Q_thick, tiny_q) )
+     ! Hubeny-type bridging using BOTH tauR and tauP:
+     !   Qrad -> (64/3) sigma T^4 / (kappaR Sigma)   for tauR >> 1
+     !   Qrad -> 2 kappaP Sigma sigma T^4            for tauP << 1
+     !
+     ! Coefficients 32 and 8 ensure correct thick/thin limits (was 16,2 = wrong).
+     Qrad_loc = (32.0_dp * sbc * T_loc**4) / &
+                ( 3.0_dp * tauR_eff + 8.0_dp / max(tauP_eff, 1.0e-30_dp) )
   else
-     if (tau_eff >= tau_thick) then
+     if (tauR_eff >= tau_thick) then
         Qrad_loc = Q_thick
      else
         Qrad_loc = Q_thin
@@ -279,11 +287,11 @@ subroutine Qvis_and_Qrad_KFM2008(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc
 end subroutine Qvis_and_Qrad_KFM2008
 
   subroutine Qvis_and_Qrad(r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
-                           kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc, kappaP_loc)
+                           kappaR_loc, tauR_loc, Qvis_loc, Qrad_loc, kap_planck_loc)
     real(dp), intent(in)  :: r_cgs, Sigma_cgs, OmegaK_cgs, nu_dim_loc, T_loc, &
                              kappaR_loc, tauR_loc
     real(dp), intent(out) :: Qvis_loc, Qrad_loc
-    real(dp), intent(in), optional :: kappaP_loc
+    real(dp), intent(in), optional :: kap_planck_loc
     logical, parameter    :: use_bridging = .true.
     real(dp), parameter   :: tau_thick = 4.0_dp / 3.0_dp
     real(dp)              :: Q_thick, Q_thin, w, kapP_use
@@ -296,7 +304,7 @@ end subroutine Qvis_and_Qrad_KFM2008
     ! Radiative cooling rate
     ! Optically thick: Rosseland. Optically thin: Planck (when provided)
     kapP_use = kappaR_loc
-    if (present(kappaP_loc)) kapP_use = kappaP_loc
+    if (present(kap_planck_loc)) kapP_use = kap_planck_loc
     Q_thick = 64.0_dp * sbc * T_loc**4 / (3.0_dp * kappaR_loc * Sigma_cgs)
     Q_thin  = 2.0_dp * kapP_use * Sigma_cgs * sbc * T_loc**4
 

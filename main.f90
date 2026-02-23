@@ -34,7 +34,7 @@ program viscous_disk_main
   use input_file_mod, only : infile
   use run_control_mod, only : do_restart, it_restart, chk_file, chkfreq, outfreq, &
        thermal_stability_freq, do_thermal_stability_output, do_thermal_stability_all_roots, &
-       do_hot_region_metrics, iprint_irr
+       do_hot_region_metrics, iprint_irr, sed_nnu, sed_nu_min_fac, sed_nu_max_fac
   use timestep_seed_mod, only : reset_dt_seed
   use irradiation_mod, only : init_irradiation_buffer
   use disk_energy_mod, only : build_initial_disk_structure
@@ -42,8 +42,8 @@ program viscous_disk_main
   implicit none
 
   namelist /run_control/ do_restart, it_restart, chk_file, chkfreq, outfreq, &
-       thermal_stability_freq, do_thermal_stability_output, do_thermal_stability_all_roots, &
-       do_hot_region_metrics, iprint_irr
+  thermal_stability_freq, do_thermal_stability_output, do_thermal_stability_all_roots, &
+  do_hot_region_metrics, iprint_irr, sed_nnu, sed_nu_min_fac, sed_nu_max_fac
 
   integer(i4b) :: it, i, it_start
   real(dp), allocatable :: dr(:)
@@ -51,6 +51,8 @@ program viscous_disk_main
   real(dp), allocatable :: sigma_row(:), tmid_row(:), qirr_row(:)
   logical, allocatable :: shadow_row(:)
   real(dp) :: dt_out
+  real(dp) :: rQ_rms_step, rQ_p95_step, rQ_max_step
+  real(dp) :: rdt_max_step, rdt_rms_step, rdt_p95_step, qbal_max_step, qbal_p95_step
   logical :: success
 
   ! 1) Setup always builds grid/dt/nt/allocates arrays, but does NOT create ICs.
@@ -84,9 +86,9 @@ program viscous_disk_main
   ! Disk structure (disk_t*.dat): for animation; keep relatively frequent
   if (outfreq <= 0) outfreq = max(1_i4b, nt / 1000_i4b)
   ! Checkpoint: at least 10 times over the run
-  if (chkfreq <= 0) chkfreq = max(nt / 10_i4b, 1_i4b)
+  if (chkfreq <= 0) chkfreq = max(nt / 1000_i4b, 1_i4b)
   ! Thermal stability output: at least 10 times over the run
-  if (thermal_stability_freq <= 0) thermal_stability_freq = max(nt / 10_i4b, 1_i4b)
+  if (thermal_stability_freq <= 0) thermal_stability_freq = max(nt / 1000_i4b, 1_i4b)
 
   ! 3) Initialize state (restart or fresh)
   if (do_restart) then
@@ -124,7 +126,10 @@ program viscous_disk_main
 
      call load_state_from_history(it)
 
-     success = evolve_try_to_target(it, t_nd, dt_out, dr)
+     success = evolve_try_to_target(it, t_nd, dt_out, dr, &
+                                    rQ_rms_step, rQ_p95_step, rQ_max_step, &
+                                    rdt_max_step, rdt_rms_step, rdt_p95_step, &
+                                    qbal_max_step, qbal_p95_step)
 
      if (.not. success) then
        write(*,'(a,i9,a,1pe12.4)') 'FATAL: time step failed at it=', it, ', t_nd=', t_nd
@@ -139,7 +144,9 @@ program viscous_disk_main
      if (outfreq > 0 .and. mod(it, outfreq) == 0) then
         write(*,'(a,i9,a,1pe12.3,a,1pe12.3)') &
              'Step =', it, '  Time =', t_nd, ' / ', t_sim_end_eff
-        call output_disk_structure_dtl(it+1, t_nd)
+        call output_disk_structure_dtl(it+1, t_nd, rQ_rms_step,rQ_p95_step, rQ_max_step, &
+                                       rdt_max_step, rdt_rms_step, rdt_p95_step, &
+                                       qbal_max_step, qbal_p95_step)
         call output_mdot_profile(it+1, t_nd)
         call compute_disk_mass(it+1, t_nd)
         if (use_be_decretion) call output_edge_radius(it+1, t_nd)

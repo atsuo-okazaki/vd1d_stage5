@@ -52,7 +52,6 @@ SRC = kind_params.f90 \
       hot_region_metrics_mod.f90 \
       run_control_mod.f90 \
       evolve_try_mod.f90 \
-      evolve_substep_mod.f90 \
       setup.f90 \
       state_io_mod.f90 \
       disk_state_update_mod.f90 \
@@ -84,6 +83,16 @@ scurve_main.o: scurve_main.f90
 	$(FC) $(FFLAGS) -c $<
 
 #------------------------------
+# One-cell thermal stability (root find) program
+#------------------------------
+ONECELL_OBJ = $(filter-out main.o, $(OBJ)) onecell_rootfind_from_diskt.o
+onecell_rootfind: $(ONECELL_OBJ)
+	$(FC) -o onecell_rootfind $(ONECELL_OBJ) $(LDFLAGS)
+
+onecell_rootfind_from_diskt.o: onecell_rootfind_from_diskt.f90
+	$(FC) $(FFLAGS) -c $<
+
+#------------------------------
 # Planck opacity test
 #------------------------------
 TEST_PLANCK_OBJ = $(filter-out main.o, $(OBJ)) test_planck_opacity.o
@@ -105,10 +114,10 @@ debug: clean $(EXE)
 #------------------------------
 # Utility targets
 #------------------------------
-.PHONY: clean show debug test_planck
+.PHONY: clean show debug test_planck scurve onecell_rootfind
 
 clean:
-	rm -f $(OBJ) $(EXE) scurve scurve_main.o test_planck test_planck_opacity.o *.mod
+	rm -f $(OBJ) $(EXE) scurve scurve_main.o onecell_rootfind onecell_rootfind_from_diskt.o test_planck test_planck_opacity.o *.mod
 
 show:
 	@echo "Compiler  : $(FC)"

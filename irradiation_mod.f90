@@ -1114,6 +1114,7 @@ end subroutine compute_shadow_loggrid_smooth
 
   subroutine build_Qirr_profile_eq16_with_raw(n, r_cgs, H_cgs_in, Qirr_raw_out, Qirr_out, dYdXi_out, Y_out)
     use kind_params, only : dp, i4b
+    use constants, only : pi
     use mod_global, only : use_finite_irradiation_source, R_star
     use units_disk_mod, only : r_dim
     implicit none
@@ -1127,6 +1128,8 @@ end subroutine compute_shadow_loggrid_smooth
 
     real(dp) :: xi(n), Y(n), dYdXi(n)
     real(dp) :: alpha_star, alpha_flare, factor, pref_star, Qirr_flat_star
+    real(dp), parameter :: c_fd = 4.0_dp / (3.0_dp * pi)
+    real(dp) :: pref, bracket, alpha_star_term
     integer(i4b) :: i
 
     if (rin_cgs <= 0.0_dp .or. L1 <= 0.0_dp .or. A1 <= 0.0_dp) then
@@ -1152,30 +1155,40 @@ end subroutine compute_shadow_loggrid_smooth
     ! Enforce non-negative irradiation for the solver
     Qirr_out(:) = max(Qirr_raw_out(:), 0.0_dp)
 
-    ! Finite-size stellar disk: additive grazing angle (Chiang & Goldreich; LOH24)
-    ! alpha_total = alpha_star + alpha_flare
-    !   alpha_star = 0.4*R_star/r (finite stellar disk)
-    !   alpha_flare = xi*dY/dxi = r*d(H/r)/dr (disk flaring, already in LOH24)
-    ! alpha_flare >= alpha_star: Qirr = Qirr_LOH24 * (alpha_star+alpha_flare)/alpha_flare
-    ! alpha_flare <  alpha_star: Qirr = (alpha_star+alpha_flare)/alpha_star * Qirr_flat_star
-    !   (smooth, no blow-up; Qirr_flat_star = pref*0.2*(R_star/rin)/xi^3)
+    ! Finite-size stellar disk correction (additive grazing term)
+    !
+    ! We implement:
+    !   Qirr^finite(r) = (A1*L1)/(2*pi*r^2) * [ alpha_flare + alpha_star ]
+    ! where
+    !   alpha_flare = d(H/r)/d(ln r) = xi * dY/dxi  (same term as LOH24 Eq.16)
+    !   alpha_star  = (4/(3*pi)) * (R_star/r)       (finite stellar angular size)
+    !
+    ! This is an ADDITIVE correction (no piecewise switch), and it naturally
+    ! gives non-zero irradiation even for a flat disk (alpha_flare ~ 0).
     if (use_finite_irradiation_source .and. R_star > 0.0_dp) then
-       pref_star = (A1 * L1) / (2.0_dp * pi * rin_cgs * rin_cgs)
-       do i = 1, n
-          if (r_cgs(i) > 0.0_dp) then
-             alpha_star = 0.4_dp * R_star / r_cgs(i)
-             alpha_flare = max(xi(i) * dYdXi(i), 0.0_dp)
-             Qirr_flat_star = pref_star * 0.2_dp * (R_star / rin_cgs) / (xi(i)**3)
-             if (alpha_flare >= alpha_star) then
-                factor = (alpha_star + alpha_flare) / alpha_flare
-                Qirr_out(i) = Qirr_out(i) * factor
-             else
-                factor = (alpha_star + alpha_flare) / alpha_star
-                Qirr_out(i) = factor * Qirr_flat_star
-             end if
-          end if
-       end do
-    end if
+      ! Prefactor written in your (rin, xi) convention:
+      !   (A1*L1)/(2*pi*r^2) = (A1*L1)/(2*pi*rin^2) * (1/xi^2)
+      pref = (A1 * L1) / (2.0_dp * pi * rin_cgs * rin_cgs)
+
+      do i = 1, n
+         if (r_cgs(i) <= 0.0_dp) cycle
+
+         ! Point-source geometric term from Eq.16 (do not clamp here)
+         alpha_flare = xi(i) * dYdXi(i)
+
+         ! Finite-star additive term
+         alpha_star_term = c_fd * (R_star / r_cgs(i))
+
+         ! Total bracket
+         bracket = alpha_flare + alpha_star_term
+
+         ! Rebuild Qirr using the finite-star bracket
+         Qirr_out(i) = pref * bracket / (xi(i) * xi(i))
+      end do
+
+      ! Enforce non-negative irradiation for the solver (once, at the end)
+      Qirr_out(:) = max(Qirr_out(:), 0.0_dp)
+   end if
 
     dYdXi_out(:) = dYdXi(:)
     Y_out(:)     = Y(:)

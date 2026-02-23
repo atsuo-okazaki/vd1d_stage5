@@ -17,12 +17,12 @@
 module checkpoint_mod
   use kind_params, only : dp, i4b
   use mod_global,  only : nr, r, sigmat, nu_conv, t_nd, dt, alpha, &
-                          Tmid, H, rho, kappaR, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
+                          Tmid, H, rho, kappaR, kappa_planck, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
                           use_irradiation_delay
   use irradiation_mod, only : save_irradiation_buffer, load_irradiation_buffer
   implicit none
 
-  integer(i4b), parameter :: CKPT_VER = 4
+  integer(i4b), parameter :: CKPT_VER = 5
   integer(i4b), parameter :: CKPT_MAGIC = int(z'434B5054', i4b)  ! 'CKPT'
 
 contains
@@ -74,6 +74,8 @@ contains
     write(iu_cp) rho(it_chk,   :)
     write(iu_cp) kappaR(it_chk-1, :)
     write(iu_cp) kappaR(it_chk,   :)
+    write(iu_cp) kappa_planck(it_chk-1, :)
+    write(iu_cp) kappa_planck(it_chk,   :)
     write(iu_cp) tauR(it_chk-1, :)
     write(iu_cp) tauR(it_chk,   :)
     write(iu_cp) Qirr(it_chk-1, :)
@@ -198,6 +200,13 @@ contains
     read(iu_re) tmp(:); rho(it_restart,   :) = tmp(:)
     read(iu_re) tmp(:); kappaR(it_restart-1, :) = tmp(:)
     read(iu_re) tmp(:); kappaR(it_restart,   :) = tmp(:)
+    if (ver >= 5) then
+       read(iu_re) tmp(:); kappa_planck(it_restart-1, :) = tmp(:)
+       read(iu_re) tmp(:); kappa_planck(it_restart,   :) = tmp(:)
+    else
+       kappa_planck(it_restart-1, :) = kappaR(it_restart-1, :)
+       kappa_planck(it_restart,   :) = kappaR(it_restart,   :)
+    end if
     read(iu_re) tmp(:); tauR(it_restart-1, :) = tmp(:)
     read(iu_re) tmp(:); tauR(it_restart,   :) = tmp(:)
     read(iu_re) tmp(:); Qirr(it_restart-1, :) = tmp(:)

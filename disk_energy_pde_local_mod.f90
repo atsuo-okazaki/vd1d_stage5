@@ -30,8 +30,8 @@ contains
 
     integer(i4b) :: i, k
     real(dp) :: T, Told, F, dFdT
-    real(dp) :: H,rho,nu,kappa,tau,Qvis,Qirr,Qrad
-    real(dp) :: H2,rho2,nu2,kappa2,tau2,Qvis2,Qirr2,Qrad2
+    real(dp) :: H,rho,nu,kappa,kappaP,tau,Qvis,Qirr,Qrad
+    real(dp) :: H2,rho2,nu2,kappa2,kappaP2,tau2,Qvis2,Qirr2,Qrad2
     real(dp) :: dT
 
     do i = 1, nr
@@ -45,13 +45,13 @@ contains
 
        do k = 1, newton_max
           call heating_cooling_cell(r_cgs(i),Sigma_cgs(i),OmegaK_cgs(i), &
-                                    shadow(i),T,H,rho,nu,kappa,tau, &
+                                    shadow(i),T,H,rho,nu,kappa,kappaP,tau, &
                                     Qvis,Qirr,Qrad, Qirr_in=Qirr_lag(i))
 
           F = Sigma_cgs(i)*cV_const*(T-Told)/dt_phys - (Qvis+Qirr-Qrad)
 
           call heating_cooling_cell(r_cgs(i),Sigma_cgs(i),OmegaK_cgs(i), &
-                                    shadow(i),T*1.01_dp,H2,rho2,nu2,kappa2,tau2, &
+                                    shadow(i),T*1.01_dp,H2,rho2,nu2,kappa2,kappaP2,tau2, &
                                     Qvis2,Qirr2,Qrad2, Qirr_in=Qirr_lag(i))
 
           dFdT = ( Sigma_cgs(i)*cV_const*(1.01_dp*T-Told)/dt_phys &

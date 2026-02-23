@@ -7,6 +7,7 @@ contains
     use constants, only : year, msun
     use mod_global, only : nr, nt, dt, alpha, t_nd, t_sim_start, t_sim_end, t_sim_end_eff, &
                            use_energy_balance, use_be_decretion, use_irradiation, &
+                           use_irradiation_delay, use_finite_irradiation_source, use_energy_pde, &
                            inner_bc_type, outer_bc_type, p_nu_isothermal, &
                            M_star, R_star, Teff_star, q, R0, L_star, eta_acc, f_edd_cap, &
                            delta, alphaSS, hr0, nu0_nd, nu0_dim, fwhm, sigma_init, &
@@ -14,6 +15,8 @@ contains
                            use_inflow, mdot_inj_edd, mdot_inj_phys, mdot_inj_msunyr, mdot_inj_nd, &
                            rinj_min, rinj_max, t_in_start, t_in_end
     use irradiation_mod, only : L_irr
+    use run_control_mod, only : do_thermal_stability_output, do_thermal_stability_all_roots, &
+                                do_hot_region_metrics
     implicit none
 
     character(len=*), intent(in) :: fname
@@ -42,6 +45,20 @@ contains
     call copy_text_file_if_exists(iu, run_control_file)
 
     call write_separator(iu, 'DERIVED / RUNTIME VALUES (selected)')
+    write(iu,'(a)') '--- logical parameters (all) ---'
+    write(iu,'(a,l1)') 'do_restart                  = ', do_restart
+    write(iu,'(a,l1)') 'do_thermal_stability_output = ', do_thermal_stability_output
+    write(iu,'(a,l1)') 'do_thermal_stability_all_roots = ', do_thermal_stability_all_roots
+    write(iu,'(a,l1)') 'do_hot_region_metrics       = ', do_hot_region_metrics
+    write(iu,'(a,l1)') 'use_energy_balance          = ', use_energy_balance
+    write(iu,'(a,l1)') 'use_be_decretion            = ', use_be_decretion
+    write(iu,'(a,l1)') 'use_irradiation             = ', use_irradiation
+    write(iu,'(a,l1)') 'use_irradiation_delay       = ', use_irradiation_delay
+    write(iu,'(a,l1)') 'use_finite_irradiation_source= ', use_finite_irradiation_source
+    write(iu,'(a,l1)') 'use_energy_pde              = ', use_energy_pde
+    write(iu,'(a,l1)') 'use_inflow                  = ', use_inflow
+    write(iu,'(a,l1)') 'use_wind_truncation         = ', use_wind_truncation
+    write(iu,'(a)') ''
     write(iu,'(a,1pe20.12)') 't_sim_start        = ', t_sim_start
     write(iu,'(a,1pe20.12)') 't_sim_end          = ', t_sim_end
     write(iu,'(a,1pe20.12)') 't_sim_end_eff      = ', t_sim_end_eff

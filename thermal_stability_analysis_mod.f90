@@ -56,7 +56,7 @@ contains
     logical,  intent(out) :: thermally_stable
 
     real(dp) :: T_lo, T_hi
-    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp
+    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp
     real(dp) :: Qvis_lo, Qirr_lo, Qrad_lo
     real(dp) :: Qvis_hi, Qirr_hi, Qrad_hi
     real(dp) :: Qplus_lo, Qminus_lo, Qplus_hi, Qminus_hi
@@ -67,13 +67,13 @@ contains
     T_hi = Tmid_val * (10.0_dp**(+dlogT_pert))
 
     call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_lo, &
-         H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+         H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
          Qvis_lo, Qirr_lo, Qrad_lo, Qirr_in=Qirr_in)
     Qplus_lo = Qvis_lo + Qirr_lo
     Qminus_lo = Qrad_lo
 
     call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_hi, &
-         H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+         H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
          Qvis_hi, Qirr_hi, Qrad_hi, Qirr_in=Qirr_in)
     Qplus_hi = Qvis_hi + Qirr_hi
     Qminus_hi = Qrad_hi
@@ -143,9 +143,12 @@ contains
     write(iu, '(a, i8, a, 1pe14.6, a, 1pe14.6, a)') '# it = ', it, ', t_nd = ', t_nd, ' (t = ', t_dim(t_nd), ' [s])'
     write(iu, '(a, 1pe14.6, a, 1pe14.6, a)') '# t0 = ', t0, ', R0 = ', R0, ' [cm]'
     write(iu, '(a)') '# Thermal instability analysis: dQ+/dT, dQ-/dT [erg/cm^2/s/K]'
-    write(iu, '(a)') '# stability: 1 = stable (dQ-/dT > dQ+/dT), -1 = unstable'
-    write(iu, '(a)') '# r_cgs  Sigma  Tmid  kappa  Qvis  Qirr  Qrad  dQplus_dT  dQminus_dT  stability'
-    write(iu, '(a)') '#'
+    write(iu, '(a)') '# stability: 1=stable, -1=unstable, 0=off-equilibrium(|R| too large)'
+    write(iu, '(a)') '# resR = |(Qvis+Qirr)-Qrad| / max(Qrad,tiny)'
+    write(iu, '(a)') '# near_turning: 1 if |(dF/dlogSigma)/Qrad| is small at this (Sigma,T)'
+    write(iu, '(a)') '#    r_cgs        Sigma        Tmid         kappa        ' &
+         &     //'Qvis         Qirr         Qrad       dQplus_dT   dQminus_dT ' &
+         &     //'stability   resR  near_turning dF_dlogSigma_norm'
 
     block
       integer(i4b) :: n_unstable
@@ -160,35 +163,69 @@ contains
        OmegaK_cgs = omegaK_dim(r_nd(i))
 
        if (Sigma_cgs <= tiny_sigma .or. Tmid_arr(i) <= tiny_T) then
-          write(iu, '(1p,9e13.5, i4)') r_cgs, Sigma_cgs, 0.0_dp, 0.0_dp, &
+         write(iu, '(1p,9e13.5, 3x, i3)') r_cgs, Sigma_cgs, 0.0_dp, 0.0_dp, &
                0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 0.0_dp, 1
           cycle
        end if
 
-       call compute_thermal_derivatives(r_cgs, Sigma_cgs, OmegaK_cgs, &
-            is_shadow_arr(i), Tmid_arr(i), Qirr_arr(i), &
-            dQplus_dT, dQminus_dT, thermally_stable)
-
-       if (.not. thermally_stable) then
-          n_unstable = n_unstable + 1
-          r_unstable_min = min(r_unstable_min, r_cgs)
-          r_unstable_max = max(r_unstable_max, r_cgs)
-       end if
-
-       ! Get Qvis, Qrad, kappa for this cell (one extra heating_cooling_cell call)
+       ! Evaluate Q's and opacity at the current (Sigma,Tmid) first
        block
-         real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp
-         real(dp) :: Qvis_tmp, Qirr_tmp, Qrad_tmp
+         real(dp) :: H_tmp, rho_tmp, nu_tmp, tau_tmp
+         real(dp) :: Qplus, Qminus, f, resR
+         real(dp) :: kappa_tmp, kappa_planck_tmp, Qvis_tmp, Qirr_tmp, Qrad_tmp
+         real(dp) :: dF_dlogSigma_norm
+         integer(i4b) :: stab_flag, near_turning
+
+         real(dp), parameter :: tiny_Q = 1.0e-99_dp
+         real(dp), parameter :: resR_crit = 1.0e-3_dp   ! <-- tune if needed
+         real(dp), parameter :: turn_crit = 1.0e-2_dp   ! <-- |dF/dlogSigma|/Qrad threshold
+
          call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, is_shadow_arr(i), &
-              Tmid_arr(i), H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+              Tmid_arr(i), H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
               Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_arr(i))
-         if (thermally_stable) then
-            write(iu, '(1p,9e13.5, i4)') r_cgs, Sigma_cgs, Tmid_arr(i), kappa_tmp, &
-                 Qvis_tmp, Qirr_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, 1
+
+         Qplus  = Qvis_tmp + Qirr_tmp
+         Qminus = Qrad_tmp
+         f      = Qplus - Qminus
+         resR   = abs(f) / max(abs(Qminus), tiny_Q)
+
+         ! Default outputs
+         dQplus_dT  = 0.0_dp
+         dQminus_dT = 0.0_dp
+         stab_flag  = 0
+         near_turning = 0
+         dF_dlogSigma_norm = 0.0_dp
+
+         if (resR <= resR_crit) then
+            ! On/near equilibrium: stability is meaningful
+            call compute_thermal_derivatives(r_cgs, Sigma_cgs, OmegaK_cgs, &
+                 is_shadow_arr(i), Tmid_arr(i), Qirr_arr(i), &
+                 dQplus_dT, dQminus_dT, thermally_stable)
+
+            if (thermally_stable) then
+               stab_flag = 1
+            else
+               stab_flag = -1
+            end if
+
+            ! Turning-point proximity (cheap local diagnostic):
+            ! turning in T(Sigma) occurs near dF/dlogSigma ~ 0 at fixed T
+            call turning_proximity_flag(r_cgs, Sigma_cgs, OmegaK_cgs, is_shadow_arr(i), &
+                 Tmid_arr(i), Qirr_arr(i), dF_dlogSigma_norm, near_turning, turn_crit)
          else
-            write(iu, '(1p,9e13.5, i4)') r_cgs, Sigma_cgs, Tmid_arr(i), kappa_tmp, &
-                 Qvis_tmp, Qirr_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, -1
+            ! Off equilibrium: keep stab_flag=0, derivatives=0, near_turning=0
          end if
+
+         if (stab_flag == -1) then
+            n_unstable = n_unstable + 1
+            r_unstable_min = min(r_unstable_min, r_cgs)
+            r_unstable_max = max(r_unstable_max, r_cgs)
+         end if
+
+         write(iu, '(1p,9e13.5, 3x, i3, 1x, e13.5, 3x, i3, 6x, e13.5)') &
+              r_cgs, Sigma_cgs, Tmid_arr(i), kappa_tmp, &
+              Qvis_tmp, Qirr_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, &
+              stab_flag, resR, near_turning, dF_dlogSigma_norm
        end block
     end do
 
@@ -203,6 +240,58 @@ contains
     close(iu)
 
   end subroutine output_thermal_stability_profile
+
+  subroutine turning_proximity_flag(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Tmid, Qirr_in, &
+                                   dF_dlogSigma_norm, near_turning, turn_crit)
+    ! Estimate proximity to a turning point of the equilibrium manifold F(T,Sigma)=0
+    ! using a local finite-difference of F with respect to log(Sigma) at fixed T.
+    !
+    ! At a turning point in T(Sigma), dT/dSigma diverges -> (∂F/∂Sigma)_T ~ 0.
+    !
+    ! We compute:
+    !   F = (Qvis+Qirr) - Qrad
+    !   dF/dlogSigma ~ (F_hi - F_lo) / (logSigma_hi - logSigma_lo)
+    ! and normalize by Qrad for robustness.
+
+    real(dp), intent(in)  :: r_cgs, Sigma_cgs, OmegaK_cgs
+    logical,  intent(in)  :: shadow
+    real(dp), intent(in)  :: Tmid, Qirr_in
+    real(dp), intent(out) :: dF_dlogSigma_norm
+    integer(i4b), intent(out) :: near_turning
+    real(dp), intent(in)  :: turn_crit
+
+    real(dp) :: Sig_lo, Sig_hi, logSig_lo, logSig_hi
+    real(dp) :: H_t, rho_t, nu_t, kap_t, kapP_t, tau_t
+    real(dp) :: Qv, Qi, Qr, F_lo, F_hi
+    real(dp) :: Qrad_ref
+    real(dp), parameter :: dlogSigma = 1.0e-3_dp  ! ~0.23% in Sigma
+    real(dp), parameter :: tiny_Q = 1.0e-99_dp
+
+    near_turning = 0
+    dF_dlogSigma_norm = 0.0_dp
+
+    Sig_lo = Sigma_cgs * (10.0_dp**(-dlogSigma))
+    Sig_hi = Sigma_cgs * (10.0_dp**(+dlogSigma))
+
+    logSig_lo = log10(max(Sig_lo, 1.0e-99_dp))
+    logSig_hi = log10(max(Sig_hi, 1.0e-99_dp))
+
+    call heating_cooling_cell(r_cgs, Sig_lo, OmegaK_cgs, shadow, Tmid, &
+                H_t, rho_t, nu_t, kap_t, kapP_t, tau_t, Qv, Qi, Qr, Qirr_in=Qirr_in)
+                F_lo = (Qv + Qi) - Qr
+
+    call heating_cooling_cell(r_cgs, Sig_hi, OmegaK_cgs, shadow, Tmid, &
+                H_t, rho_t, nu_t, kap_t, kapP_t, tau_t, Qv, Qi, Qr, Qirr_in=Qirr_in)
+
+    F_hi = (Qv + Qi) - Qr
+    Qrad_ref = max(abs(Qr), tiny_Q)
+
+    dF_dlogSigma_norm = abs((F_hi - F_lo) / max((logSig_hi - logSig_lo), 1.0e-99_dp)) / Qrad_ref
+
+    if (dF_dlogSigma_norm <= turn_crit) then
+       near_turning = 1
+    end if
+  end subroutine turning_proximity_flag
 
   !------------------------------------------------------------
   ! find_all_thermal_roots
@@ -229,7 +318,7 @@ contains
     real(dp), allocatable :: logTgrid(:), Fgrid(:)
     real(dp) :: logT_lo, logT_hi, dlogT, logT_mid
     real(dp) :: T_trial, cs2, H_trial, rho_trial, logR_trial
-    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp
+    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp
     real(dp) :: Qvis_tmp, Qirr_tmp, Qrad_tmp
     real(dp) :: f_lo, f_hi, f_mid
 
@@ -262,7 +351,7 @@ contains
        end if
 
        call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-            H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+            H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
             Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_in)
        Fgrid(i) = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
        if (ieee_is_nan(Fgrid(i)) .or. .not. ieee_is_finite(Fgrid(i))) ieee_ok(i) = 1
@@ -286,13 +375,13 @@ contains
 
        T_trial = 10.0_dp**logT_lo
        call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-            H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+            H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
             Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_in)
        f_lo = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
 
        T_trial = 10.0_dp**logT_hi
        call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-            H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+            H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
             Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_in)
        f_hi = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
 
@@ -300,7 +389,7 @@ contains
           logT_mid = 0.5_dp * (logT_lo + logT_hi)
           T_trial = 10.0_dp**logT_mid
           call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-               H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+               H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
                Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_in)
           f_mid = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
           if (f_lo * f_mid <= 0.0_dp) then
@@ -346,7 +435,7 @@ contains
     real(dp) :: T_roots(max_roots)
     real(dp) :: dQplus_dT, dQminus_dT
     logical  :: thermally_stable
-    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp
+    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp
     real(dp) :: Qvis_tmp, Qirr_tmp, Qrad_tmp
     character(len=64) :: fname
     real(dp), parameter :: tiny_sigma = 1.0e-8_dp
@@ -389,7 +478,7 @@ contains
 
        do j = 1, n_roots
           call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, is_shadow_arr(i), &
-               T_roots(j), H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+               T_roots(j), H_tmp, rho_tmp, nu_tmp, kappa_tmp, kappa_planck_tmp, tau_tmp, &
                Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_arr(i))
           call compute_thermal_derivatives(r_cgs, Sigma_cgs, OmegaK_cgs, &
                is_shadow_arr(i), T_roots(j), Qirr_arr(i), &
@@ -419,92 +508,121 @@ contains
   ! Output file: Sigma, T, kappa, Qvis, Qrad, dQ+/dT, dQ-/dT, stability
   !------------------------------------------------------------
   subroutine generate_scurve_at_radius(r_cgs, OmegaK_cgs, shadow, Qirr_in, &
-       Sigma_min, Sigma_max, nSigma, filename)
+       Sigma_min, Sigma_max, nSigma, filename, T_min, T_max, Sigma_sim, Tmid_sim)
     real(dp), intent(in) :: r_cgs, OmegaK_cgs
     logical,  intent(in) :: shadow
     real(dp), intent(in) :: Qirr_in
     real(dp), intent(in) :: Sigma_min, Sigma_max
     integer(i4b), intent(in) :: nSigma
     character(len=*), intent(in) :: filename
+    real(dp), intent(in), optional :: T_min, T_max, Sigma_sim, Tmid_sim
 
     integer(i4b) :: i, iu, nroots, ierr, j
     real(dp) :: Sigma_cgs, T_root, logT_lo, logT_hi, dlogT
-    real(dp) :: H_loc, rho_loc, nu_dim, kappa_loc, tau_loc
+    real(dp) :: logSigma_min, logSigma_max, logSigma
+    real(dp) :: logT_min, logT_max
+    real(dp) :: H_loc, rho_loc, nu_dim, kappa_loc, kappa_planck, tau_loc
     real(dp) :: Qvis_tmp, Qirr_tmp, Qrad_tmp
     real(dp) :: Tmid_roots(20)
     real(dp) :: dQplus_dT, dQminus_dT
     logical  :: thermally_stable
     integer(i4b), parameter :: Nscan = 400
-    real(dp), parameter :: logT_min = 1.5_dp   ! ~30 K
-    real(dp), parameter :: logT_max = 5.0_dp   ! ~10^5 K
+
+    ! Temperature range for root search [K]; defaults ~30 K - 10^5 K
+    if (present(T_min) .and. present(T_max)) then
+       logT_min = log10(max(T_min, 1.0e-30_dp))
+       logT_max = log10(max(T_max, 1.0e-30_dp))
+    else
+       logT_min = 1.5_dp
+       logT_max = 5.0_dp
+    end if
 
     open(newunit=iu, file=trim(filename), status='replace', action='write')
-    write(iu, '(a, 1pe14.6, a)') '# S-curve at r = ', r_cgs, ' [cm]'
+    write(iu, '(a, 1pe14.6, a, 1pe14.6, a)') '# S-curve at r = ', r_cgs, ' [cm] ( r/R0 = ', r_cgs/R0, ' )'
+    if (present(Sigma_sim) .and. present(Tmid_sim)) then
+       if (Sigma_sim > 0.0_dp .and. Tmid_sim > 0.0_dp) then
+          write(iu, '(a, 1pe14.6, a, 1pe14.6, a)') &
+               '# Sigma_cgs = ', Sigma_sim, ' [g/cm^2], Tmid = ', Tmid_sim, ' [K]'
+       end if
+    end if
     write(iu, '(a, 1pe14.6, a)') '# Qirr = ', Qirr_in, ' [erg/cm^2/s]'
-    write(iu, '(a)') '# Sigma  T  kappa  Qvis  Qrad  dQplus_dT  dQminus_dT  stability'
+    write(iu, '(a)') '# Sigma  T  branch  kappa  Qvis  Qrad  dQplus_dT  dQminus_dT  stability'
+
+    ! Log scale for Sigma: uniform in log10(Sigma) for fine resolution over wide range
+    logSigma_min = log10(max(Sigma_min, 1.0e-30_dp))
+    logSigma_max = log10(max(Sigma_max, 1.0e-30_dp))
 
     do i = 0, nSigma
-       Sigma_cgs = Sigma_min + (Sigma_max - Sigma_min) * real(i, dp) / max(1, nSigma)
+       logSigma = logSigma_min + (logSigma_max - logSigma_min) * real(i, dp) / max(1, nSigma)
+       Sigma_cgs = 10.0_dp**logSigma
 
        if (Sigma_cgs <= 1.0e-20_dp) cycle
 
-       ! Scan T to find roots of F(T) = (Qvis+Qirr) - Qrad = 0
+       ! Scan T to find ALL roots of F(T) = (Qvis+Qirr) - Qrad = 0
        nroots = 0
-       T_root = 0.0_dp
-       dlogT = (logT_max - logT_min) / real(Nscan, dp)
+       dlogT  = (logT_max - logT_min) / real(Nscan, dp)
 
        do j = 1, Nscan
-          logT_lo = logT_min + dlogT * (j - 1)
-          logT_hi = logT_min + dlogT * j
+          logT_lo = logT_min + dlogT * real(j - 1, dp)
+          logT_hi = logT_min + dlogT * real(j, dp)
+
           call find_root_bracket(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, &
-               10.0_dp**logT_lo, 10.0_dp**logT_hi, T_root, nroots, ierr)
-          if (nroots > 0) exit
+               10.0_dp**logT_lo, 10.0_dp**logT_hi, T_root, ierr)
+
+          if (ierr == 0) then
+             call push_root_unique(T_root, Tmid_roots, nroots, 0.02_dp)  ! 2% in logT
+          end if
        end do
 
        if (nroots == 0) cycle
 
-       ! Compute structure and derivatives at T_root
-       call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_root, &
-            H_loc, rho_loc, nu_dim, kappa_loc, tau_loc, &
-            Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_in)
-       call compute_thermal_derivatives(r_cgs, Sigma_cgs, OmegaK_cgs, &
-            shadow, T_root, Qirr_in, dQplus_dT, dQminus_dT, thermally_stable)
+       ! For each root, compute structure and stability and write out
+       do j = 1, nroots
+          T_root = Tmid_roots(j)
 
-       if (thermally_stable) then
-          write(iu, '(1p,7e14.6, i4)') Sigma_cgs, T_root, kappa_loc, &
-               Qvis_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, 1
-       else
-          write(iu, '(1p,7e14.6, i4)') Sigma_cgs, T_root, kappa_loc, &
-               Qvis_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, -1
-       end if
+          call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_root, &
+               H_loc, rho_loc, nu_dim, kappa_loc, kappa_planck, tau_loc, &
+               Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_in)
+
+          call compute_thermal_derivatives(r_cgs, Sigma_cgs, OmegaK_cgs, &
+               shadow, T_root, Qirr_in, dQplus_dT, dQminus_dT, thermally_stable)
+
+          if (thermally_stable) then
+             write(iu, '(1p,2e14.6,1x,i3,1x,5e14.6,i4)') Sigma_cgs, T_root, j, kappa_loc, &
+                  Qvis_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, 1
+          else
+             write(iu, '(1p,2e14.6,1x,i3,1x,5e14.6,i4)') Sigma_cgs, T_root, j, kappa_loc, &
+                  Qvis_tmp, Qrad_tmp, dQplus_dT, dQminus_dT, -1
+          end if
+       end do
+
     end do
     close(iu)
 
   contains
     subroutine find_root_bracket(r_c, Sig_c, OmK_c, shad, Qirr, T_lo, T_hi, &
-         T_out, nout, ierr)
+         T_out, ierr)
       real(dp), intent(in)  :: r_c, Sig_c, OmK_c, T_lo, T_hi
       logical,  intent(in)  :: shad
       real(dp), intent(in)  :: Qirr
       real(dp), intent(out) :: T_out
-      integer(i4b), intent(out) :: nout, ierr
+      integer(i4b), intent(out) :: ierr
 
       real(dp) :: f_lo, f_hi, f_mid, logT_lo, logT_hi, logT_mid
-      real(dp) :: H_t, rho_t, nu_t, kap_t, tau_t, Qv_t, Qi_t, Qr_t
+      real(dp) :: H_t, rho_t, nu_t, kap_t, kapP_t, tau_t, Qv_t, Qi_t, Qr_t
       integer(i4b) :: iter
       integer(i4b), parameter :: iter_max = 50
       real(dp), parameter :: tol_rel = 1.0e-6_dp
 
       call heating_cooling_cell(r_c, Sig_c, OmK_c, shad, T_lo, &
-           H_t, rho_t, nu_t, kap_t, tau_t, Qv_t, Qi_t, Qr_t, Qirr_in=Qirr)
+           H_t, rho_t, nu_t, kap_t, kapP_t, tau_t, Qv_t, Qi_t, Qr_t, Qirr_in=Qirr)
       f_lo = (Qv_t + Qi_t) - Qr_t
 
       call heating_cooling_cell(r_c, Sig_c, OmK_c, shad, T_hi, &
-           H_t, rho_t, nu_t, kap_t, tau_t, Qv_t, Qi_t, Qr_t, Qirr_in=Qirr)
+           H_t, rho_t, nu_t, kap_t, kapP_t, tau_t, Qv_t, Qi_t, Qr_t, Qirr_in=Qirr)
       f_hi = (Qv_t + Qi_t) - Qr_t
 
       if (f_lo * f_hi >= 0.0_dp) then
-         nout = 0
          ierr = 1
          return
       end if
@@ -515,7 +633,7 @@ contains
          logT_mid = 0.5_dp * (logT_lo + logT_hi)
          T_out = 10.0_dp**logT_mid
          call heating_cooling_cell(r_c, Sig_c, OmK_c, shad, T_out, &
-              H_t, rho_t, nu_t, kap_t, tau_t, Qv_t, Qi_t, Qr_t, Qirr_in=Qirr)
+              H_t, rho_t, nu_t, kap_t, kapP_t, tau_t, Qv_t, Qi_t, Qr_t, Qirr_in=Qirr)
          f_mid = (Qv_t + Qi_t) - Qr_t
          if (f_lo * f_mid <= 0.0_dp) then
             logT_hi = logT_mid
@@ -525,16 +643,75 @@ contains
             f_lo = f_mid
          end if
          if (abs(logT_hi - logT_lo) / max(abs(logT_hi), 1.0e-99_dp) < tol_rel) then
-            nout = 1
             ierr = 0
             T_out = 10.0_dp**(0.5_dp * (logT_lo + logT_hi))
             return
          end if
       end do
-      nout = 1
       ierr = 0
       T_out = 10.0_dp**(0.5_dp * (logT_lo + logT_hi))
     end subroutine find_root_bracket
   end subroutine generate_scurve_at_radius
+
+  subroutine push_root_unique(Tnew, Troots, nroots, dlogT_merge)
+   ! Store a root if it is not a near-duplicate of existing roots.
+   ! Duplicate merging is done in log10(T) space for robustness.
+   !
+   ! Inputs:
+   !   Tnew        : candidate root temperature [K]
+   !   dlogT_merge : merge threshold in log10(T) (e.g., 0.02 ~ 5%)
+   !
+   ! In/Out:
+   !   Troots(:)   : stored roots
+   !   nroots      : number of stored roots
+   real(dp), intent(in)    :: Tnew, dlogT_merge
+   real(dp), intent(inout) :: Troots(:)
+   integer(i4b), intent(inout) :: nroots
+
+   integer(i4b) :: k
+   real(dp) :: logTnew, logTk
+
+   if (Tnew <= 0.0_dp) return
+
+   logTnew = log10(Tnew)
+
+   do k = 1, nroots
+      logTk = log10(max(Troots(k), 1.0e-99_dp))
+      if (abs(logTnew - logTk) <= dlogT_merge) then
+         ! Keep the one closer to the center of the bracket is not tracked here;
+         ! just ignore near-duplicates.
+         return
+      end if
+   end do
+
+   if (nroots + 1 > size(Troots)) then
+      ! Too many roots; increase Troots size if needed.
+      return
+   end if
+
+   nroots = nroots + 1
+   Troots(nroots) = Tnew
+
+   call sort_roots_ascending(Troots, nroots)
+ end subroutine push_root_unique
+
+
+ subroutine sort_roots_ascending(Troots, nroots)
+   ! Simple insertion sort for small nroots.
+   real(dp), intent(inout) :: Troots(:)
+   integer(i4b), intent(in) :: nroots
+   integer(i4b) :: i, j
+   real(dp) :: key
+
+   do i = 2, nroots
+      key = Troots(i)
+      j = i - 1
+      do while (j >= 1 .and. Troots(j) > key)
+         Troots(j+1) = Troots(j)
+         j = j - 1
+      end do
+      Troots(j+1) = key
+   end do
+ end subroutine sort_roots_ascending
 
 end module thermal_stability_analysis_mod

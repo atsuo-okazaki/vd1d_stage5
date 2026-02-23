@@ -24,7 +24,7 @@ module disk_energy_pde_mod
   use kind_params, only : dp, i4b
   use constants,   only : kb, mp, mu
   use mod_global,  only : nr, r, t0, nu0_dim, nu0_nd, nu_conv, &
-                          Tmid, H, rho, kappaR, tauR, Qvis, Qrad, Qirr, dYdXi, &
+                          Tmid, H, rho, kappaR, kappa_planck, tauR, Qvis, Qrad, Qirr, dYdXi, &
                           use_irradiation, is_shadow
   use units_disk_mod, only : r_dim, omegaK_dim, sigma_dim
   use radiation_params_mod, only : T_floor, T_ceiling
@@ -47,7 +47,7 @@ contains
     real(dp) :: r_cgs(nr), Sigma_cgs(nr), OmegaK_cgs(nr)
     real(dp) :: H_geom(nr), Y(nr), dY(nr), dY_tmp(nr), Qirr_prof(nr)
     real(dp) :: T_old, T_new
-    real(dp) :: H_loc, rho_loc, kappa_loc, tau_loc, nu_dim_loc
+    real(dp) :: H_loc, rho_loc, kappa_loc, kappa_planck_loc, tau_loc, nu_dim_loc
     real(dp) :: Qv, Qi_tmp, Qc
     integer(i4b) :: i
     logical :: shadow_cell(nr)
@@ -84,7 +84,7 @@ contains
     dYdXi(itp1, :) = dY_tmp(:)
 
     ! Temperature update per cell (implicit Euler + Newton)
-!$omp parallel do default(shared) private(i, T_old, T_new, H_loc, rho_loc, nu_dim_loc, kappa_loc, tau_loc, Qv, Qi_tmp, Qc)
+!$omp parallel do default(shared) private(i, T_old, T_new, H_loc, rho_loc, nu_dim_loc, kappa_loc, kappa_planck_loc, tau_loc, Qv, Qi_tmp, Qc)
     do i = 1, nr
 
       if (Sigma_cgs(i) <= tiny_sigma .or. OmegaK_cgs(i) <= 0.0_dp) then
@@ -92,6 +92,7 @@ contains
         H(itp1,i)      = 0.0_dp
         rho(itp1,i)    = 0.0_dp
         kappaR(itp1,i) = 0.0_dp
+        kappa_planck(itp1,i) = 0.0_dp
         tauR(itp1,i)   = 0.0_dp
         Qvis(itp1,i)   = 0.0_dp
         Qrad(itp1,i)   = 0.0_dp
@@ -112,11 +113,12 @@ contains
 
       ! Recompute structure + Q terms consistently at T_new using provided Qirr_in
       call heating_cooling_cell(r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow_cell(i), T_new, &
-                                H_loc, rho_loc, nu_dim_loc, kappa_loc, tau_loc, Qv, Qi_tmp, Qc, &
+                                H_loc, rho_loc, nu_dim_loc, kappa_loc, kappa_planck_loc, tau_loc, Qv, Qi_tmp, Qc, &
                                 Qirr_in=Qirr_prof(i))
       H(itp1,i)      = H_loc
       rho(itp1,i)    = rho_loc
       kappaR(itp1,i) = kappa_loc
+      kappa_planck(itp1,i) = kappa_planck_loc
       tauR(itp1,i)   = tau_loc
       Qvis(itp1,i)   = Qv
       Qrad(itp1,i)   = Qc
@@ -154,7 +156,7 @@ contains
     real(dp) :: r_cgs(nr), Sigma_cgs(nr), OmegaK_cgs(nr)
     real(dp) :: H_geom(nr), Y(nr), dY(nr), dY_tmp(nr), Qirr_prof(nr)
     real(dp) :: T_use
-    real(dp) :: H_loc, rho_loc, kappa_loc, tau_loc, nu_dim_loc
+    real(dp) :: H_loc, rho_loc, kappa_loc, kappa_planck_loc, tau_loc, nu_dim_loc
     real(dp) :: Qv, Qi_tmp, Qc
     integer(i4b) :: i
     logical :: shadow_cell(nr)
@@ -195,6 +197,7 @@ contains
         H(it,i)      = 0.0_dp
         rho(it,i)    = 0.0_dp
         kappaR(it,i) = 0.0_dp
+        kappa_planck(it,i) = 0.0_dp
         tauR(it,i)   = 0.0_dp
         Qvis(it,i)   = 0.0_dp
         Qrad(it,i)   = 0.0_dp
@@ -208,12 +211,13 @@ contains
       T_use = max(T_floor, min(T_use, T_ceiling))
 
       call heating_cooling_cell(r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow_cell(i), T_use, &
-                                H_loc, rho_loc, nu_dim_loc, kappa_loc, tau_loc, Qv, Qi_tmp, Qc, &
+                                H_loc, rho_loc, nu_dim_loc, kappa_loc, kappa_planck_loc, tau_loc, Qv, Qi_tmp, Qc, &
                                 Qirr_in=Qirr_prof(i))
 
       H(it,i)      = H_loc
       rho(it,i)    = rho_loc
       kappaR(it,i) = kappa_loc
+      kappa_planck(it,i) = kappa_planck_loc
       tauR(it,i)   = tau_loc
       Qvis(it,i)   = Qv
       Qrad(it,i)   = Qc
@@ -312,11 +316,11 @@ contains
     logical,  intent(in)  :: shadow
     real(dp), intent(out) :: R
 
-    real(dp) :: H_loc, rho_loc, nu_dim, kappa_loc, tau_loc, Qv, Qi_tmp, Qc
+    real(dp) :: H_loc, rho_loc, nu_dim, kappa_loc, kappa_planck_loc, tau_loc, Qv, Qi_tmp, Qc
     real(dp) :: rhs
 
     call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T, &
-                              H_loc, rho_loc, nu_dim, kappa_loc, tau_loc, Qv, Qi_tmp, Qc, &
+                              H_loc, rho_loc, nu_dim, kappa_loc, kappa_planck_loc, tau_loc, Qv, Qi_tmp, Qc, &
                               Qirr_in=Qirr_in)
 
     rhs = (Qv + Qirr_in - Qc) / max(Sigma_cgs*cv, 1.0e-99_dp)

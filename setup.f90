@@ -14,7 +14,8 @@ module setup_mod
        fwhm, sigma_init, delta, alphaSS, hr0, nu0_nd, nu0_dim, &
        init_units, allocate_global, alloc_cur_state, print_global_info, &
        use_energy_balance, use_energy_pde, use_be_decretion, use_irradiation, &
-       use_irradiation_delay, use_finite_irradiation_source, inner_bc_type, outer_bc_type, &
+       use_irradiation_delay, use_finite_irradiation_source, &
+       inner_bc_type, outer_bc_type, &
        mdot_inj_nd, mdot_inj_phys, &
        mdot_inj_edd, mdot_inj_msunyr, eta_acc, f_edd_cap, &
        kappa_es, t0, p_nu_isothermal, rho_cut, r_edge, i_edge, &

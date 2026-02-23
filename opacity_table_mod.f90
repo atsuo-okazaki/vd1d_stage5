@@ -72,28 +72,30 @@ contains
   !------------------------------------------------------------
   subroutine init_opacity_tables()
     implicit none
+
+    character(len=70), parameter :: dir = '/Users/atsuo/Documents/programs/AD/AD1D/vd1d_stage5/data/'
     !external :: optables_OP_AES_S03, optables_OP_F05_S03, optables_OP_S03
 
     if (opacity_initialized) return
 
     select case (opacity_tables)
     case ('OP+AES+S03')
-       file_highT = 'data/OPTable73.data'
-       file_midT  = 'data/AESOPUSTable.data'
-       file_lowT  = 'data/SemenovRosselandTable.data'
+       file_highT = trim(dir)//'OPTable73.data'
+       file_midT  = trim(dir)//'AESOPUSTable.data'
+       file_lowT  = trim(dir)//'SemenovRosselandTable.data'
        call optables_OP_AES_S03()
     case ('OP+F05+S03')
-       file_highT = 'data/OPTable73.data'
-       file_midT  = 'data/FergusonA09Table.data'
-       file_lowT  = 'data/SemenovRosselandTable.data'
+       file_highT = trim(dir)//'OPTable73.data'
+       file_midT  = trim(dir)//'FergusonA09Table.data'
+       file_lowT  = trim(dir)//'SemenovRosselandTable.data'
        call optables_OP_F05_S03()
     !case ('OP+AES')
-    !   file_highT = 'data/OPTable73.data'
-    !   file_lowT  = 'data/AESOPUSTable.data'
+    !   file_highT = trim(dir)//'OPTable73.data'
+    !   file_lowT  = trim(dir)//'AESOPUSTable.data'
     !   call optables_OP_AES()
     case ('OP+S03')
-       file_highT = 'data/OPTable73.data'
-       file_lowT  = 'data/SemenovRosselandTable.data'
+       file_highT = trim(dir)//'OPTable73.data'
+       file_lowT  = trim(dir)//'SemenovRosselandTable.data'
        call optables_OP_S03()
     case default
        write (*, '("+++ opacity_tables = ", a, " is not availble. +++")') &
@@ -116,7 +118,8 @@ contains
     use kind_params, only : i4b, dp
     use op_params,   only : logTlow, logrho, NTlow, Nrho
     implicit none
-    character(len=70), parameter :: file_planck = 'data/SemenovPlanckTable.data'
+    character(len=70), parameter :: dir = '/Users/atsuo/Documents/programs/AD/AD1D/vd1d_stage5/data/'
+    character(len=100), parameter :: file_planck = trim(dir)//'SemenovPlanckTable.data'
     character(len=3000) line
     character(len=5)  :: a5
     character(len=7)  :: a7
@@ -222,11 +225,10 @@ contains
        end if
        kappaP = 10.0_dp**logkapx
     else
-       ! T > 10^4 K: Kramers + electron scattering
+       ! T > 1e4 K: true absorption only (free-free; add bound-free if you have it)
        kappa_ff = kff_coeff * g_ff * (1.0_dp - Z_abund_P) * (1.0_dp + X_abund_P) &
-            * rho * T**(-3.5_dp)
-       kappa_es = kes
-       kappaP = kappa_ff + kappa_es
+                  * rho * T**(-3.5_dp) 
+       kappaP = kappa_ff      ! <-- DO NOT add kappa_es here for thin cooling
     end if
   end subroutine get_opacity_Planck_rhoT
 
@@ -260,7 +262,7 @@ contains
       !---------------------------------------------------
       ! Read the high-temperature opacity table: OP table
       !---------------------------------------------------
-      OPEN (newunit=iu_op, FILE=file_highT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_highT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_highT
@@ -307,7 +309,7 @@ contains
       ! Read the low-temperature opacity table: AESOPUS 2.1
       !----------------------------------------------------
       iu_op = -1
-      OPEN (newunit=iu_op, FILE=file_lowT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_lowT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_lowT
@@ -384,7 +386,7 @@ contains
       integer(i4b) :: ios, alloc_error, i, j, nskip1, nskip2
 
       !-- Read the opacity table for T >= 10^4 K
-      OPEN (newunit=iu_op, FILE=file_highT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_highT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_highT
@@ -449,7 +451,7 @@ contains
       
       !-- Read the opacity le for T < 10^4 K
       iu_op = -1
-      OPEN (newunit=iu_op, FILE=file_lowT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_lowT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_lowT
@@ -544,7 +546,7 @@ contains
       !---------------------------------------------------
       ! Read the high-temperature opacity table: OP table
       !---------------------------------------------------
-      OPEN (newunit=iu_op, FILE=file_highT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_highT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_highT
@@ -591,7 +593,7 @@ contains
       ! Read the mid-temperature opacity table: AESOPUS 2.1
       !--------------------------------------------------------
       iu_op = -1
-      OPEN (newunit=iu_op, FILE=file_midT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_midT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_midT
@@ -642,7 +644,7 @@ contains
       ! Read the low-temperature opacity table: Semenov 03
       !----------------------------------------------------
       iu_op = -1
-      OPEN (newunit=iu_op, FILE=file_lowT, iostat=ios, &
+      OPEN (newunit=iu_op, FILE=trim(file_lowT), iostat=ios, &
            status='old', form='formatted', action='read')
          IF (ios /= 0) THEN
             WRITE (*,"('### Error in opening ', A70)") file_lowT

@@ -22,10 +22,7 @@
      !character(len=6), parameter :: intpol = 'poly'
      character(len=6),  parameter :: intpol  = 'spline'
 
-     character(len=70) :: file_highT, file_midT, file_lowT
-     !character(len=70), parameter :: file_highT = 'data/OPTable73.data', &
-     !     file_midT  = 'data/FergusonA09Table.data', &
-     !     file_lowT  = 'data/SemenovRosselandTable.data'
+     character(len=100) :: file_highT, file_midT, file_lowT
      integer(i4b) :: NThigh, NTmid, NTlow, NRhigh, NRmid, NRlow, Nrho
      real(dp), parameter :: kes = 0.34_dp, &
           kff0 = 6.2e22_dp ! kappa_ff = kff0 * rho * Tc**(-3.5)

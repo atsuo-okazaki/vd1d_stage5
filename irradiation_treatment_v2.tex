@@ -1,0 +1,104 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{cite}
+\usepackage{hyperref}
+\usepackage[margin=2.5cm]{geometry}
+\begin{document}
+
+\title{Irradiation Treatment Revised}
+\author{}
+\date{}
+\maketitle
+
+% Revised IRRADIATION_TREATMENT.tex
+% Key improvements:
+% - Planck mean uses true absorption only
+% - Explicit separation of tau_P and tau_R
+% - Hubeny-type bridging introduced with references
+% - Clarified opacity assumptions
+
+\section{Opacity Treatment}
+
+In this work, we distinguish between the Rosseland mean opacity ($\kappa_R$) and the Planck mean opacity ($\kappa_P$), which play different physical roles in radiative transfer.
+
+\subsection{Planck Mean Opacity ($\kappa_P$)}
+
+The Planck mean opacity is used in the optically thin cooling limit and therefore must represent \textit{true absorption} processes only. It is defined as
+\begin{equation}
+\kappa_P = \frac{\int \kappa_\nu B_\nu , d\nu}{\int B_\nu , d\nu},
+\end{equation}
+and thus includes only processes that can emit radiation.
+
+In this work, we adopt:
+\begin{itemize}
+\item For $T \leq 10^4$ K: Semenov et al. (2003) opacity tables (dust + gas absorption)
+\item For $T > 10^4$ K: free-free opacity ($\kappa_{ff}$)
+\end{itemize}
+
+\textbf{Important:} electron scattering opacity ($\kappa_{es}$) is \textbf{not included} in $\kappa_P$, since Thomson scattering does not contribute to radiative cooling in the absence of Comptonization.
+
+\subsection{Rosseland Mean Opacity ($\kappa_R$)}
+
+The Rosseland mean opacity governs radiative diffusion in optically thick regions and is defined as
+\begin{equation}
+\frac{1}{\kappa_R} = \frac{\int (1/\kappa_\nu) (\partial B_\nu / \partial T) , d\nu}{\int (\partial B_\nu / \partial T) , d\nu}.
+\end{equation}
+
+In this work, $\kappa_R$ is taken directly from opacity tables (OP + AESOPUS + Semenov 2003). These tables are assumed to represent the dominant absorption processes.
+
+We do not explicitly add electron scattering opacity to $\kappa_R$, since in the present simulations the Rosseland mean opacity is already sufficiently large ($\kappa_R \gg 0.34 , \mathrm{cm^2 , g^{-1}}$) in the high-temperature regions, and scattering effects are subdominant.
+
+\section{Radiative Cooling}
+
+We model radiative cooling using a bridging formula between optically thin and optically thick limits.
+
+\subsection{Optical Depths}
+
+We define two optical depths:
+\begin{align}
+\tau_R &= \frac{1}{2} \kappa_R \Sigma, \\
+\tau_P &= \frac{1}{2} \kappa_P \Sigma.
+\end{align}
+
+Here, $\tau_R$ governs radiative diffusion, while $\tau_P$ governs local emission/absorption.
+
+\subsection{Limiting Cases}
+
+The optically thick cooling rate is given by
+\begin{equation}
+Q_{\mathrm{thick}} = \frac{64 \sigma T^4}{3 \kappa_R \Sigma},
+\end{equation}
+
+and the optically thin cooling rate is
+\begin{equation}
+Q_{\mathrm{thin}} = 2 \kappa_P \Sigma \sigma T^4.
+\end{equation}
+
+\subsection{Bridging Formula}
+
+To smoothly connect these limits, we adopt a Hubeny-type bridging formula:
+\begin{equation}
+Q^- = \frac{16 \sigma T^4}{3 \tau_R + 2 / \tau_P}.
+\end{equation}
+
+This expression reproduces the correct asymptotic behavior in both limits and provides improved numerical stability across opacity transitions.
+
+\subsection{Reference for Bridging Formula}
+
+The above bridging form is motivated by radiative transfer treatments in accretion disks (e.g., Hubeny 1990, ApJ, 351, 632) and is commonly used in vertically averaged disk models.
+
+\section{Remarks}
+
+The present model does not resolve the vertical disk structure. Therefore, the opacity treatment should be regarded as an effective approximation. In particular:
+\begin{itemize}
+\item The separation of $\kappa_P$ and $\kappa_R$ ensures physical consistency between emission and diffusion processes.
+\item The neglect of electron scattering in $\kappa_P$ avoids artificial enhancement of cooling in optically thin regions.
+\item The omission of explicit scattering in $\kappa_R$ is justified for the current parameter regime but may need revision in fully ionized, low-opacity conditions.
+\end{itemize}
+
+\section{Future Work}
+
+A more detailed treatment including vertical structure and frequency-dependent radiative transfer would be required for higher accuracy, especially in regimes where scattering becomes important.
+
+\end{document}

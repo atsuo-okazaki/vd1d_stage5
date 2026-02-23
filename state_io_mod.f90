@@ -1,8 +1,8 @@
 module state_io_mod
   use kind_params, only : dp, i4b
   use mod_global,  only : nr, &
-                          sigmat, Tmid, H, rho, kappaR, tauR, Qvis, Qrad, Qirr, dYdXi, nu_conv, &
-                          sigma_cur, nu_cur, Tmid_cur, H_cur, rho_cur, kappa_cur, tau_cur, &
+                          sigmat, Tmid, H, rho, kappaR, kappa_planck, tauR, Qvis, Qrad, Qirr, dYdXi, nu_conv, &
+                          sigma_cur, nu_cur, Tmid_cur, H_cur, rho_cur, kappa_cur, kappa_planck_cur, tau_cur, &
                           Qvis_cur, Qrad_cur, Qirr_cur, dYdXi_cur, shadow_cur
   implicit none
 contains
@@ -10,8 +10,8 @@ contains
   subroutine load_state_from_history(it)
     use mod_global, only : nr, sigmat, Tmid, nu_conv, k_iter, m_iter, &
                          sigma_cur, Tmid_cur, nu, nu_cur, k_iter_cur, m_iter_cur, &
-                         H, rho, kappaR, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
-                         H_cur, rho_cur, kappa_cur, tau_cur, Qvis_cur, Qrad_cur, &
+                         H, rho, kappaR, kappa_planck, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
+                         H_cur, rho_cur, kappa_cur, kappa_planck_cur, tau_cur, Qvis_cur, Qrad_cur, &
                          Qirr_cur, dYdXi_cur, shadow_cur
     implicit none
     integer(i4b), intent(in) :: it
@@ -28,6 +28,7 @@ contains
     H_cur(:)        = H(it,:)
     rho_cur(:)      = rho(it,:)
     kappa_cur(:)    = kappaR(it,:)
+    kappa_planck_cur(:) = kappa_planck(it,:)
     tau_cur(:)      = tauR(it,:)
     Qvis_cur(:)     = Qvis(it,:)
     Qrad_cur(:)     = Qrad(it,:)
@@ -41,8 +42,8 @@ contains
   subroutine store_state_to_history(itp1)
     use mod_global, only : nr, sigmat, Tmid, nu_conv, k_iter, m_iter, &
                          sigma_cur, Tmid_cur, nu, nu_cur, k_iter_cur, m_iter_cur, &
-                         H, rho, kappaR, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
-                         H_cur, rho_cur, kappa_cur, tau_cur, Qvis_cur, Qrad_cur, &
+                         H, rho, kappaR, kappa_planck, tauR, Qvis, Qrad, Qirr, dYdXi, is_shadow, &
+                         H_cur, rho_cur, kappa_cur, kappa_planck_cur, tau_cur, Qvis_cur, Qrad_cur, &
                          Qirr_cur, dYdXi_cur, shadow_cur
     implicit none
     integer(i4b), intent(in) :: itp1
@@ -58,6 +59,7 @@ contains
     H(itp1,:)       = H_cur(:)
     rho(itp1,:)     = rho_cur(:)
     kappaR(itp1,:)  = kappa_cur(:)
+    kappa_planck(itp1,:) = kappa_planck_cur(:)
     tauR(itp1,:)    = tau_cur(:)
     Qvis(itp1,:)    = Qvis_cur(:)
     Qrad(itp1,:)    = Qrad_cur(:)

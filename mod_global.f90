@@ -54,6 +54,7 @@ module mod_global
   real(dp), allocatable :: rho(:,:)
   real(dp), allocatable :: H(:,:)
   real(dp), allocatable :: kappaR(:,:)
+  real(dp), allocatable :: kappa_planck(:,:)
   real(dp), allocatable :: tauR(:,:)
   integer(i4b), allocatable :: k_iter(:)
   integer(i4b), allocatable :: m_iter(:)
@@ -63,7 +64,7 @@ module mod_global
   ! current state vectors advanced by substeps
   !---------------------------------------------------------
   real(dp), allocatable :: sigma_cur(:), nu_cur(:)
-  real(dp), allocatable :: Tmid_cur(:), H_cur(:), rho_cur(:), kappa_cur(:), tau_cur(:)
+  real(dp), allocatable :: Tmid_cur(:), H_cur(:), rho_cur(:), kappa_cur(:), kappa_planck_cur(:), tau_cur(:)
   real(dp), allocatable :: Qvis_cur(:), Qrad_cur(:), Qirr_cur(:), dYdXi_cur(:)
   logical, allocatable  :: shadow_cur(:)
   integer(i4b) :: k_iter_cur, m_iter_cur
@@ -268,6 +269,7 @@ contains
     if (allocated(H))      deallocate(H)
     if (allocated(rho))    deallocate(rho)
     if (allocated(kappaR)) deallocate(kappaR)
+    if (allocated(kappa_planck)) deallocate(kappa_planck)
     if (allocated(tauR))   deallocate(tauR)
     if (allocated(Qvis)) deallocate(Qvis)
     if (allocated(Qrad)) deallocate(Qrad)
@@ -280,7 +282,7 @@ contains
     if (allocated(i_edge)) deallocate(i_edge)
 
     allocate(r(nr), nu(nr), nu_conv(nt,nr), sigmat(nt,nr), &
-         Tmid(nt,nr), H(nt,nr), rho(nt,nr), kappaR(nt,nr), &
+         Tmid(nt,nr), H(nt,nr), rho(nt,nr), kappaR(nt,nr), kappa_planck(nt,nr), &
          tauR(nt,nr), Qvis(nt,nr), Qrad(nt,nr),            &
          Qirr(nt,nr), dYdXi(nt,nr), is_shadow(nt,nr),         &
          k_iter(nt), m_iter(nt), r_edge(nt), i_edge(nt), stat=ierr)
@@ -294,7 +296,7 @@ contains
   subroutine alloc_cur_state(nr_in)
     integer(i4b), intent(in) :: nr_in
     allocate(sigma_cur(nr_in), nu_cur(nr_in))
-    allocate(Tmid_cur(nr_in), H_cur(nr_in), rho_cur(nr_in), kappa_cur(nr_in), tau_cur(nr_in))
+    allocate(Tmid_cur(nr_in), H_cur(nr_in), rho_cur(nr_in), kappa_cur(nr_in), kappa_planck_cur(nr_in), tau_cur(nr_in))
     allocate(Qvis_cur(nr_in), Qrad_cur(nr_in), Qirr_cur(nr_in), dYdXi_cur(nr_in))
     allocate(shadow_cur(nr_in))
   end subroutine alloc_cur_state
@@ -311,6 +313,7 @@ contains
     if (allocated(H))      deallocate(H)
     if (allocated(rho))    deallocate(rho)
     if (allocated(kappaR)) deallocate(kappaR)
+    if (allocated(kappa_planck)) deallocate(kappa_planck)
     if (allocated(tauR)) deallocate(tauR)
     if (allocated(Qvis)) deallocate(Qvis)
     if (allocated(Qrad)) deallocate(Qrad)

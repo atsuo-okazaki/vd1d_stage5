@@ -22,7 +22,7 @@ contains
     real(dp), intent(out):: T(nr)
 
     integer(i4b) :: i, k
-    real(dp) :: Tloc, H,rho,nu,kappa,tau,Qvis,Qirr_loc,Qrad
+    real(dp) :: Tloc, H,rho,nu,kappa,kappaP,tau,Qvis,Qirr_loc,Qrad
     real(dp) :: F, dFdT, Ttrial
 
     do i = 1, nr
@@ -35,14 +35,14 @@ contains
 
        do k = 1, 50
           call heating_cooling_cell(r(i),Sigma(i),OmegaK(i),shadow(i),Tloc, &
-                                    H,rho,nu,kappa,tau,Qvis,Qirr_loc,Qrad, &
+                                    H,rho,nu,kappa,kappaP,tau,Qvis,Qirr_loc,Qrad, &
                                     Qirr_in=Qirr(i))
           F = Qvis + Qirr_loc - Qrad
           if (abs(F)/max(Qrad,1.0_dp) < 1.0e-4_dp) exit
 
           Ttrial = Tloc * 1.01_dp
           call heating_cooling_cell(r(i),Sigma(i),OmegaK(i),shadow(i),Ttrial, &
-                                    H,rho,nu,kappa,tau,Qvis,Qirr_loc,Qrad, &
+                                    H,rho,nu,kappa,kappaP,tau,Qvis,Qirr_loc,Qrad, &
                                     Qirr_in=Qirr(i))
           dFdT = (Qvis + Qirr_loc - Qrad - F)/(Ttrial-Tloc)
 

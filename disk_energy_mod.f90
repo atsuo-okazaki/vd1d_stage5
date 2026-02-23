@@ -21,6 +21,8 @@ module disk_energy_mod
   public :: build_initial_disk_structure
   public :: solve_structure_from_sigma
   public :: commit_structure_to_global
+  public :: stats_max_rms_p95
+  public :: stats_max_p95
 
 contains
 
@@ -35,7 +37,7 @@ contains
     ! ---- local work arrays (structure at itp1) ----
     real(dp) :: T_prev(nr)
     real(dp) :: nu_new(nr)          ! dimensionless nu (this will be updated)
-    real(dp) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), tau_loc(nr)
+    real(dp) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr)
     real(dp) :: Qvis_loc(nr), Qrad_loc(nr), Qirr_prof(nr), dYdXi_loc(nr)
     logical  :: shadow_loc(nr)
 
@@ -60,7 +62,7 @@ contains
     !    Signature must match exactly what you pasted.
     !------------------------------------------------------------
     call solve_structure_from_sigma( nr, r_nd, sigma_in, T_prev, &
-                                  nu_new, Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, &
+                                  nu_new, Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, &
                                   Qvis_loc, Qrad_loc, Qirr_prof, dYdXi_loc, shadow_loc, &
                                   mm_iter )
 
@@ -69,7 +71,7 @@ contains
     !    (This writes Tmid(itp1,:), H(itp1,:), ... etc.)
     !------------------------------------------------------------
     call commit_structure_to_global( itp1, &
-                                   Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, &
+                                   Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, &
                                    Qvis_loc, Qrad_loc, Qirr_prof, dYdXi_loc, shadow_loc, &
                                    nu_new, mm_iter )
 
@@ -82,7 +84,7 @@ contains
   end subroutine build_initial_disk_structure
 
   subroutine solve_structure_from_sigma( nr, r_nd, sigma_new, T_prev, &
-                                        nu_new, Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, &
+                                        nu_new, Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, &
                                         Qvis_loc, Qrad_loc, Qirr_prof, dYdXi_loc, shadow_loc, &
                                         mm_iter )
     !! Side-effect-free structure solver.
@@ -98,7 +100,7 @@ contains
     integer(i4b), intent(in)  :: nr
     real(dp),     intent(in)  :: r_nd(nr), sigma_new(nr), T_prev(nr)
     real(dp),     intent(out) :: nu_new(nr)
-    real(dp),     intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), tau_loc(nr)
+    real(dp),     intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr)
     real(dp),     intent(out) :: Qvis_loc(nr), Qrad_loc(nr), Qirr_prof(nr), dYdXi_loc(nr)
     logical,      intent(out) :: shadow_loc(nr)
     integer(i4b), intent(out) :: mm_iter
@@ -128,6 +130,7 @@ contains
     H_loc(:)     = 0.0_dp
     rho_loc(:)   = 0.0_dp
     kappa_loc(:) = 0.0_dp
+    kap_planck_loc(:)= 0.0_dp
     tau_loc(:)   = 0.0_dp
     Qvis_loc(:)  = 0.0_dp
     Qrad_loc(:)  = 0.0_dp
@@ -138,16 +141,20 @@ contains
     nu_new(:)    = 0.0_dp
 
     if (.not. use_irradiation .or. L_irr <= Lirr_floor) then
+         write(*,'(A,1PE12.4,A,1PE12.4)') &
+            'PATH: no-irr branch. L_irr=', L_irr, '  Lirr_floor=', Lirr_floor
        shadow_loc(:) = .true.
        Qirr_prof(:)  = 0.0_dp
        dYdXi_loc(:)  = 0.0_dp
 
        call thermal_solve_stageA_try( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, &
                                       shadow_loc, Qirr_prof, T_prev, &
-                                      Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim, &
+                                      Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim, &
                                       Qvis_loc, Qrad_loc )
 
     else
+       write(*,'(A,1PE12.4,A,1PE12.4)') &
+            'PATH: irr branch. L_irr=', L_irr, '  Lirr_floor=', Lirr_floor
        ! Shadow flags computed from current geometry state.
        ! If you want TRY-consistent shadow, you must compute it from H_loc iteratively.
        call build_shadow_flags(nr, shadow_loc)
@@ -155,7 +162,7 @@ contains
        call iterate_structure_irradiation_try( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, &
                                               shadow_loc, rin_cgs, A1, L1, Q12, beta1, beta2, &
                                               T_prev, &
-                                              Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim, &
+                                              Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim, &
                                               Qvis_loc, Qrad_loc, Qirr_prof, dYdXi_loc, &
                                               mm_iter )
     end if
@@ -182,18 +189,18 @@ contains
 
 
   subroutine commit_structure_to_global( itp1, &
-       Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, &
+       Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, &
        Qvis_loc, Qrad_loc, Qirr_loc, dYdXi_loc, shadow_loc, &
        nu_new, mm_iter )
     use kind_params, only : dp, i4b
-    use mod_global,  only : nr, Tmid, H, rho, kappaR, tauR, &
+    use mod_global,  only : nr, Tmid, H, rho, kappaR, kappa_planck, tauR, &
                             Qvis, Qrad, Qirr, dYdXi, is_shadow, &
                             nu_conv
     implicit none
 
     integer(i4b), intent(in) :: itp1, mm_iter
     real(dp), intent(in) :: Tmid_new(nr), H_loc(nr), rho_loc(nr)
-    real(dp), intent(in) :: kappa_loc(nr), tau_loc(nr)
+    real(dp), intent(in) :: kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr)
     real(dp), intent(in) :: Qvis_loc(nr), Qrad_loc(nr), Qirr_loc(nr)
     real(dp), intent(in) :: dYdXi_loc(nr)
     logical, intent(in)  :: shadow_loc(nr)
@@ -207,6 +214,7 @@ contains
        H(itp1, i)      = H_loc(i)
        rho(itp1, i)    = rho_loc(i)
        kappaR(itp1, i) = kappa_loc(i)
+       kappa_planck(itp1, i) = kap_planck_loc(i)
        tauR(itp1, i)   = tau_loc(i)
 
        Qvis(itp1, i)   = Qvis_loc(i)
@@ -226,7 +234,7 @@ contains
   !-----------------------------------------------------------------
   subroutine thermal_solve_stageA_try( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, shadow, &
                                       Qirr_prof, T_prev, &
-                                      Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim, &
+                                      Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim, &
                                       Qvis_loc, Qrad_loc )
     !! Thermal balance solve for each cell (no global reference).
     use radiation_params_mod, only: T_floor
@@ -237,7 +245,7 @@ contains
     real(dp), intent(in)     :: Qirr_prof(nr)
     real(dp), intent(in)     :: T_prev(nr)
 
-    real(dp), intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), tau_loc(nr), nu_dim(nr)
+    real(dp), intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr), nu_dim(nr)
     real(dp), intent(out) :: Qvis_loc(nr), Qrad_loc(nr)
 
     real(dp) :: Tmid_roots(20)
@@ -258,6 +266,7 @@ contains
        H_loc(i)     = 0.0_dp
        rho_loc(i)   = 0.0_dp
        kappa_loc(i) = 0.0_dp
+       kap_planck_loc(i)= 0.0_dp
        tau_loc(i)   = 0.0_dp
 
        if (Sigma_cgs(i) <= tiny_sigma) cycle
@@ -266,7 +275,7 @@ contains
 
        call solve_Tmid_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), &
                              T_old, Tmid_roots, H_loc(i), rho_loc(i), nu_dim(i), &
-                             kappa_loc(i), tau_loc(i), nroots, ierr, &
+                             kappa_loc(i), kap_planck_loc(i), tau_loc(i), nroots, ierr, &
                              Qvis_loc(i), Qirr_prof(i), Qrad_loc(i) )
 
        if (ierr == 0 .and. nroots > 0 .and. Tmid_roots(1) > 0.0_dp) then
@@ -281,7 +290,7 @@ contains
 
           call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), &
                                      Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i), &
-                                     kappa_loc(i), tau_loc(i), &
+                                     kappa_loc(i), kap_planck_loc(i), tau_loc(i), &
                                      Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy, &
                                      Qirr_in=Qirr_prof(i) )
        else
@@ -296,12 +305,12 @@ contains
 
 
   !-----------------------------------------------------------------
-  subroutine iterate_structure_irradiation_try( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, &
-                                               shadow, rin_cgs_in, A1_in, L1_in, Q12_in, beta1_in, beta2_in, &
-                                               T_prev, &
-                                               Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim, &
-                                               Qvis_loc, Qrad_loc, Qirr_prof, dYdXi_loc, &
-                                               mm_iter )
+subroutine iterate_structure_irradiation_try( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, &
+                                              shadow, rin_cgs_in, A1_in, L1_in, Q12_in, beta1_in, beta2_in, &
+                                              T_prev, &
+                                              Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim, &
+                                              Qvis_loc, Qrad_loc, Qirr_prof, dYdXi_loc, &
+                                              mm_iter )
     !! TRY-safe wrapper around your existing fixed-point irradiation iteration.
     !!
     !! IMPORTANT:
@@ -318,7 +327,7 @@ contains
     real(dp), intent(in) :: rin_cgs_in, A1_in, L1_in, Q12_in, beta1_in, beta2_in
     real(dp), intent(in) :: T_prev(nr)
 
-    real(dp), intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), tau_loc(nr), nu_dim(nr)
+    real(dp), intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr), nu_dim(nr)
     real(dp), intent(out) :: Qvis_loc(nr), Qrad_loc(nr), Qirr_prof(nr), dYdXi_loc(nr)
     integer(i4b), intent(out) :: mm_iter
 
@@ -329,7 +338,7 @@ contains
     call iterate_structure_irradiation( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, &
                                         0, shadow, rin_cgs_in, A1_in, L1_in, Q12_in, &
                                         beta1_in, beta2_in, mmax, epsQ, mm_iter, &
-                                        Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim, &
+                                        Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim, &
                                         Qirr_prof, dYdXi_loc )
 
     ! Qvis/Qrad are not returned by your current iterate_structure_irradiation interface.
@@ -346,7 +355,7 @@ contains
                                itp1, is_shadow,                        &
                                rin_cgs, A1, L1, Q12, beta1, beta2,     &
                                mmax, epsQ, mm_iter,                    &
-                               Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim, &
+                               Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim, &
                                Qirr_new, dYdXi_loc)
     use kind_params, only : dp, i4b
     implicit none
@@ -354,7 +363,7 @@ contains
     real(dp),     intent(in) :: r_nd(nr), r_cgs(nr), Sigma_cgs(nr), OmegaK_cgs(nr)
     logical,      intent(in) :: is_shadow(nr)
     real(dp),     intent(in) :: rin_cgs, A1, L1, Q12, beta1, beta2, epsQ
-    real(dp),     intent(out):: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), tau_loc(nr)
+    real(dp),     intent(out):: Tmid_new(nr), H_loc(nr), rho_loc(nr), kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr)
     real(dp),     intent(out):: nu_dim(nr), Qirr_new(nr), dYdXi_loc(nr)
     !real(dp),     intent(out):: Qvis_loc(nr), Qrad_loc(nr)
     integer(i4b), intent(out) :: mm_iter
@@ -392,7 +401,7 @@ contains
     ! First structure solve with the initial irradiation guess
     call thermal_solve_stageA(nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, is_shadow, &
                           Qirr_old, itp1, &
-                          Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim)
+                          Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim)
 
     wloc     = w_init
     rel_prev = huge(1.0_dp)
@@ -415,7 +424,7 @@ contains
 
        call thermal_solve_stageA(nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, is_shadow, &
                              Qirr_in, itp1, &
-                             Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim)
+                             Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim)
 
        !------------------------------------------------------------
        ! Convergence check: combined relative change in Qirr_in and Tmid
@@ -528,10 +537,10 @@ contains
     real(dp), intent(out):: Qvis_loc(nr), Qrad_loc(nr)
 
     integer(i4b) :: i
-    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp
+    real(dp) :: H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tau_tmp
     real(dp) :: Qvis_tmp, Qirr_tmp, Qrad_tmp
 
-!$omp parallel do default(shared) private(i, H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, Qvis_tmp, Qirr_tmp, Qrad_tmp)
+!$omp parallel do default(shared) private(i, H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tau_tmp, Qvis_tmp, Qirr_tmp, Qrad_tmp)
     do i = 1, nr
        Qvis_loc(i) = 0.0_dp
        Qrad_loc(i) = 0.0_dp
@@ -540,7 +549,7 @@ contains
        if (Tmid_new(i) <= 0.0_dp) cycle
 
        call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), shadow(i), Tmid_new(i), &
-                                  H_tmp, rho_tmp, nu_tmp, kappa_tmp, tau_tmp, &
+                                  H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tau_tmp, &
                                   Qvis_tmp, Qirr_tmp, Qrad_tmp, Qirr_in=Qirr_prof(i) )
        Qvis_loc(i) = Qvis_tmp
        Qrad_loc(i) = Qrad_tmp
@@ -578,7 +587,7 @@ contains
   !-----------------------------------------------------------------
   subroutine thermal_solve_stageA( nr, r_nd, r_cgs, Sigma_cgs, OmegaK_cgs, is_shadow, &
                                Qirr_prof, itp1, &
-                               Tmid_new, H_loc, rho_loc, kappa_loc, tau_loc, nu_dim)
+                               Tmid_new, H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim)
     use kind_params, only: dp, i4b
     use radiation_params_mod, only: T_floor
     implicit none
@@ -588,7 +597,7 @@ contains
     real(dp), intent(in) :: Qirr_prof(nr)
 
     real(dp), intent(out) :: Tmid_new(nr), H_loc(nr), rho_loc(nr), &
-                             kappa_loc(nr), tau_loc(nr), nu_dim(nr)
+                             kappa_loc(nr), kap_planck_loc(nr), tau_loc(nr), nu_dim(nr)
     real(dp) :: Qvis_loc(nr), Qrad_loc(nr)
 
     real(dp) :: Tmid_roots(20), T_old, T_root, logT_new
@@ -610,6 +619,7 @@ contains
        H_loc(i)     = 0.0_dp
        rho_loc(i)   = 0.0_dp
        kappa_loc(i) = 0.0_dp
+       kap_planck_loc(i)= 0.0_dp
        tau_loc(i)   = 0.0_dp
 
        if (Sigma_cgs(i) <= tiny_sigma) cycle
@@ -622,46 +632,194 @@ contains
        call solve_Tmid_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), &
                             is_shadow(i), T_old, Tmid_roots,       &
                             H_loc(i), rho_loc(i), nu_dim(i),       &
-                            kappa_loc(i), tau_loc(i),              &
+                            kappa_loc(i), kap_planck_loc(i), tau_loc(i),              &
                             nroots, ierr, Qvis_loc(i), Qirr_prof(i), Qrad_loc(i) )
 
-       if (ierr == 0 .and. nroots > 0 .and. Tmid_roots(1) > 0.0_dp) then
-          T_root       = Tmid_roots(1)
-          Tmid_new(i)  = max(T_floor, T_root)
-          !if (itp1 > 1 .and. T_old > 0.0_dp) then
-          !   ! Under-relax temperature across time steps
-          !   logT_new = ur_update(log(T_old), log(T_root), omega_T)
-          !   Tmid_new(i) = exp(logT_new)
-          !else
-          !   Tmid_new(i) = T_root
-          !end if
-
-          ! Recompute consistent structure with external Qirr (LOH24 Eq.16)
+       if (ierr == 0 .and. nroots > 0) then
+          ! Pick the physically consistent root: closest to previous time step (branch continuity)
+          call pick_root_closest_to_Told(Tmid_roots, nroots, T_old, T_root)
+                           
+          Tmid_new(i) = max(T_floor, T_root)
+                           
+          ! Recompute consistent structure with external Qirr
           call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), is_shadow(i), &
-                                   Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i),        &
-                                   kappa_loc(i), tau_loc(i),                            &
-                                   Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy,     &
-                                   Qirr_in=Qirr_prof(i) )
+                            Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i), &
+                            kappa_loc(i), kap_planck_loc(i), tau_loc(i), &
+                            Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy, &
+                            Qirr_in=Qirr_prof(i) )
+                           
+          ! Equilibrium gate: if this "root" is not really equilibrated (rare but happens near kappa jumps),
+          ! do a robust local bisection in logT to enforce F(T)=0.
+          call enforce_equilibrium_by_bisection(r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), &
+                            is_shadow(i), Qirr_prof(i), &
+                            Tmid_new(i), Tmid_new(i), ierr)
+          ! Always recompute H, rho, kappa, tau from Tmid_new (may have been updated by bisection)
+          ! so that (T, H, rho, kappa, tau) stay consistent regardless of ierr.
+          call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), is_shadow(i), &
+                            Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i), &
+                            kappa_loc(i), kap_planck_loc(i), tau_loc(i), &
+                            Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy, &
+                            Qirr_in=Qirr_prof(i) )
+                           
        else
           ! Fallback: use T_floor and compute consistent structure
           Tmid_new(i) = T_floor
           call heating_cooling_cell( r_cgs(i), Sigma_cgs(i), OmegaK_cgs(i), is_shadow(i), &
-                                   Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i),        &
-                                   kappa_loc(i), tau_loc(i),                            &
-                                   Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy,     &
-                                   Qirr_in=Qirr_prof(i) )
-          ! Warn only once per cell per run (itp1<=1 avoids spam in iteration)
-          ! if (itp1 <= 1) write (*, '("Warning: No thermal root at i =", i4)') i
+                           Tmid_new(i), H_loc(i), rho_loc(i), nu_dim(i), &
+                           kappa_loc(i), kap_planck_loc(i), tau_loc(i), &
+                           Qplus_visc_dummy, Qplus_irr_dummy, Qminus_dummy, &
+                           Qirr_in=Qirr_prof(i) )
        end if
     end do
 !$omp end parallel do
 
+  contains
+
+    subroutine pick_root_closest_to_Told(Troots, nroots, T_old, T_pick)
+      use kind_params, only: dp, i4b
+      implicit none
+      real(dp), intent(in) :: Troots(20)
+      integer(i4b), intent(in) :: nroots
+      real(dp), intent(in) :: T_old
+      real(dp), intent(out) :: T_pick
+  
+      integer(i4b) :: k, kbest
+      real(dp) :: d, dbest, logTold, logTk
+  
+      kbest = 1
+      T_pick = Troots(1)
+  
+      if (nroots <= 1) return
+      if (T_old <= 0.0_dp) then
+         ! If no previous temperature, just pick the lowest positive root (usually cold branch)
+         do k = 1, nroots
+            if (Troots(k) > 0.0_dp) then
+               T_pick = Troots(k)
+               return
+            end if
+         end do
+         return
+      end if
+  
+      logTold = log10(max(T_old, 1.0e-99_dp))
+      dbest = huge(1.0_dp)
+  
+      do k = 1, nroots
+         if (Troots(k) <= 0.0_dp) cycle
+         logTk = log10(max(Troots(k), 1.0e-99_dp))
+         d = abs(logTk - logTold)
+         if (d < dbest) then
+            dbest = d
+            kbest = k
+         end if
+      end do
+  
+      T_pick = Troots(kbest)
+    end subroutine pick_root_closest_to_Told
+
+    subroutine eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, Tmid, resR, fval)
+      use kind_params, only: dp
+      implicit none
+      real(dp), intent(in) :: r_cgs, Sigma_cgs, OmegaK_cgs, Qirr_in, Tmid
+      logical,  intent(in) :: shadow
+      real(dp), intent(out):: resR, fval
+  
+      real(dp) :: Ht, rhot, nut, kapt, kaptP, taut
+      real(dp) :: Qv, Qi, Qr
+      real(dp), parameter :: tinyQ = 1.0e-99_dp
+
+      call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Tmid, &
+           Ht, rhot, nut, kapt, kaptP, taut, Qv, Qi, Qr, Qirr_in=Qirr_in)
+  
+      fval = (Qv + Qi) - Qr
+      resR = abs(fval) / max(abs(Qr), tinyQ)
+    end subroutine eval_resR
+
+    subroutine enforce_equilibrium_by_bisection(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, &
+                                               T_init, T_sol, ierr)
+      use kind_params, only: dp, i4b
+      implicit none
+      real(dp), intent(in)  :: r_cgs, Sigma_cgs, OmegaK_cgs, Qirr_in, T_init
+      logical,  intent(in)  :: shadow
+      real(dp), intent(out) :: T_sol
+      integer(i4b), intent(out) :: ierr
+
+      integer(i4b) :: iter
+      real(dp) :: resR0, f0, resR
+      real(dp) :: logT_lo, logT_hi, logT_mid, T_lo, T_hi, T_mid
+      real(dp) :: f_lo, f_hi, f_mid
+      real(dp) :: fac
+      real(dp), parameter :: resR_crit = 1.0e-3_dp
+      integer(i4b), parameter :: iter_max = 60
+      real(dp), parameter :: tol_logT = 1.0e-8_dp
+      real(dp), parameter :: Tmin = 1.0e2_dp
+      real(dp), parameter :: Tmax = 1.0e6_dp
+
+      ierr = 0
+      T_sol = T_init
+
+      call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_init, resR0, f0)
+      if (resR0 <= resR_crit) return
+
+      ! Build a local bracket around T_init by expanding multiplicatively.
+      fac = 1.5_dp
+      T_lo = max(Tmin, T_init / fac)
+      T_hi = min(Tmax, T_init * fac)
+
+      call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_lo, resR, f_lo)
+      call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_hi, resR, f_hi)
+
+      do iter = 1, 25
+         if (f_lo * f_hi < 0.0_dp) exit
+         fac = fac * 1.6_dp
+         T_lo = max(Tmin, T_init / fac)
+         T_hi = min(Tmax, T_init * fac)
+         call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_lo, resR, f_lo)
+         call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_hi, resR, f_hi)
+      end do
+
+      if (f_lo * f_hi >= 0.0_dp) then
+         ! No bracket found: do not change T (caller can keep T_init)
+         ierr = 1
+         return
+      end if
+
+      logT_lo = log10(T_lo)
+      logT_hi = log10(T_hi)
+
+      do iter = 1, iter_max
+         logT_mid = 0.5_dp * (logT_lo + logT_hi)
+         T_mid = 10.0_dp**logT_mid
+         call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_mid, resR, f_mid)
+
+         if (f_lo * f_mid <= 0.0_dp) then
+            logT_hi = logT_mid
+            f_hi = f_mid
+         else
+            logT_lo = logT_mid
+            f_lo = f_mid
+         end if
+
+         if (abs(logT_hi - logT_lo) < tol_logT) exit
+      end do
+
+      T_sol = 10.0_dp**(0.5_dp * (logT_lo + logT_hi))
+
+      call eval_resR(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, Qirr_in, T_sol, resR0, f0)
+      if (resR0 > 1.0e-2_dp) then
+         ! Still poor -> signal failure
+         ierr = 2
+      else
+         ierr = 0
+      end if
+    end subroutine enforce_equilibrium_by_bisection
+     
   end subroutine thermal_solve_stageA
 
   !-----------------------------------------------------------------
   subroutine solve_Tmid_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, &
                            Tmid_old, Tmid_roots, H_loc, rho_loc, &
-                           nu_dim, kappa_loc, tau_loc, nroots, ierr, &
+                           nu_dim, kappa_loc, kap_planck_loc, tau_loc, nroots, ierr, &
                            Qvis_tmp, Qirr_in, Qrad_tmp )
     !! Wrapper around heating_cooling_cell(...) to find thermal-balance roots.
     use ieee_arithmetic, only: ieee_is_nan, ieee_is_finite
@@ -676,7 +834,7 @@ contains
     !integer(i4b), intent(in) :: itp1
 
     real(dp), intent(out) :: Tmid_roots(20)
-    real(dp), intent(out) :: H_loc, rho_loc, kappa_loc, tau_loc, nu_dim
+    real(dp), intent(out) :: H_loc, rho_loc, kappa_loc, kap_planck_loc, tau_loc, nu_dim
     real(dp), intent(out) :: Qvis_tmp, Qrad_tmp
     integer(i4b), intent(out) :: nroots, ierr
 
@@ -688,14 +846,16 @@ contains
     real(dp),    parameter :: tol_rel  = 1.0e-6_dp
 
     integer(i4b) :: i, j, jbest, iter, iL, scan_loop
-    integer(i4b), allocatable :: iCand(:), ieee_ok(:)
-    real(dp),     allocatable :: logTgrid(:), Fgrid(:)
-
+    ! --- Fixed workspace (OpenMP-safe; no SAVE/ALLOCATE) ---
+    integer(i4b), parameter :: Nscan_max = Nscan0 * scan_max
+    real(dp)    :: logTgrid(Nscan_max+1), Fgrid(Nscan_max+1)
+    integer(i4b):: ieee_ok(Nscan_max+1), iCand(Nscan_max)
+        
     real(dp) :: logT_lo, logT_hi, dlogT
     real(dp) :: f_lo, f_hi, f_mid, logT_mid
     real(dp) :: dmin
     real(dp) :: T_trial, H_trial, rho_trial, cs2, logR_trial, &
-                H_tmp, rho_tmp, kappa_tmp, nu_tmp
+                H_tmp, rho_tmp, kappa_tmp, kap_planck_tmp, nu_tmp
     real(dp) :: tauR_tmp, Qirr_tmp
     logical, parameter :: debug_on = .false.
     logical, save :: first = .true.
@@ -711,7 +871,7 @@ contains
        ierr = -1
        return
     end if
-
+    
     !write (*, '("solve_Tmid_cell: Qirr_in =", 1pe12.4)') Qirr_in
     
     do scan_loop = 1, scan_max
@@ -735,11 +895,28 @@ contains
           Nscan = Nscan0 * scan_max
        end if
 
+       ! -------------------------------------------------
+       ! Clamp scan range to opacity-table valid T window
+       ! (must be done for EVERY scan_loop because logT_lo/hi are redefined)
+       ! -------------------------------------------------
+       logT_lo = max(logT_lo, log10(max(T_floor,   tlow_tab )))
+       logT_hi = min(logT_hi, log10(min(T_ceiling, thigh_tab)))
+
+       if (logT_hi <= logT_lo + 1.0e-6_dp) then
+          ! Fallback: if clamped range collapsed, use the full allowed overlap
+          logT_lo = log10(max(T_floor,   tlow_tab ))
+          logT_hi = log10(min(T_ceiling, thigh_tab))
+       end if
+   
        dlogT = (logT_hi - logT_lo) / real(Nscan, dp)
 
-       allocate(logTgrid(Nscan+1), Fgrid(Nscan+1), ieee_ok(Nscan+1))
-       ieee_ok(:) = 0
-
+       ! Safety: cap Nscan to the fixed workspace
+       if (Nscan > Nscan_max) then
+         Nscan = Nscan_max
+      end if
+      
+      ieee_ok(1:Nscan+1) = 0
+      
        ! Scan (high -> low) is fine, but keep consistent
        do i = 1, Nscan + 1
           ! logTgrid has to be in the ascending order
@@ -760,7 +937,7 @@ contains
           end if
 
           call heating_cooling_cell( r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-                                H_tmp, rho_tmp, nu_tmp, kappa_tmp, tauR_tmp,   &
+                                H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tauR_tmp,   &
                                 Qvis_tmp, Qirr_tmp, Qrad_tmp,                  &
                                 Qirr_in=Qirr_in )
 
@@ -771,12 +948,11 @@ contains
           end if
        end do
 
-       allocate(iCand(Nscan))
        nroots = 0
        do i = 1, Nscan
           if (ieee_ok(i) /= 0 .or. ieee_ok(i+1) /= 0) cycle
           if (Fgrid(i) * Fgrid(i+1) < 0.0_dp) then
-             if (nroots < size(Tmid_roots)) then
+             if (nroots < size(Tmid_roots) .and. nroots < Nscan_max) then
                 nroots = nroots + 1
                 iCand(nroots) = i
              end if
@@ -788,7 +964,6 @@ contains
           exit
        else
           ierr = 1
-          deallocate(logTgrid, Fgrid, ieee_ok, iCand)
        end if
     end do
 
@@ -802,14 +977,14 @@ contains
 
        T_trial = 10.0_dp**(logT_lo)
        call heating_cooling_cell( r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-                                H_tmp, rho_tmp, nu_tmp, kappa_tmp, tauR_tmp,   &
+                                H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tauR_tmp,   &
                                 Qvis_tmp, Qirr_tmp, Qrad_tmp,                  &
                                 Qirr_in=Qirr_in )
        f_lo = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
 
        T_trial = 10.0_dp**(logT_hi)
        call heating_cooling_cell( r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-                                H_tmp, rho_tmp, nu_tmp, kappa_tmp, tauR_tmp,   &
+                                H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tauR_tmp,   &
                                 Qvis_tmp, Qirr_tmp, Qrad_tmp,                  &
                                 Qirr_in=Qirr_in )
        f_hi = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
@@ -819,7 +994,7 @@ contains
           T_trial  = 10.0_dp**(logT_mid)
 
           call heating_cooling_cell( r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-                                   H_tmp, rho_tmp, nu_tmp, kappa_tmp, tauR_tmp,   &
+                                   H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tauR_tmp,   &
                                    Qvis_tmp, Qirr_tmp, Qrad_tmp,                  &
                                    Qirr_in=Qirr_in )
           f_mid = (Qvis_tmp + Qirr_tmp) - Qrad_tmp
@@ -844,7 +1019,7 @@ contains
           if (r_cgs > 1.6e12_dp .and. r_cgs < 2.0e12_dp) then
              T_trial = Tmid_roots(j)
              call heating_cooling_cell(r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-                  H_tmp, rho_tmp, nu_tmp, kappa_tmp, tauR_tmp, Qvis_tmp, Qirr_tmp, Qrad_tmp, &
+                  H_tmp, rho_tmp, nu_tmp, kappa_tmp, kap_planck_tmp, tauR_tmp, Qvis_tmp, Qirr_tmp, Qrad_tmp, &
                   Qirr_in=Qirr_in)
              write(*,'(a,1pe12.4,a,i2,a,1pe12.4,a,1pe12.4,a,1pe12.4,a,1pe12.4,a,1pe12.4)') &
                'root: T=',T_trial,' j=',j,' kappa=',kappa_tmp,' tau=',tauR_tmp, &
@@ -867,8 +1042,6 @@ contains
     end if
     !-------------------------
 
-    deallocate(logTgrid, Fgrid, ieee_ok, iCand)
-
     ! Choose best root
     if (Tmid_old > 0.0_dp) then
        dmin  = 1.0e99_dp
@@ -888,18 +1061,107 @@ contains
        !Tmid_roots(1) = maxval(Tmid_roots(1:nroots))
        nroots        = 1
     end if
-    if (r_cgs > 2.15*R0 .and. r_cgs < 2.20*R0) then
-       write (iu_ro, '(8x, "-> Tmid(selected) =", 1pe12.4)') Tmid_roots(1)
-    end if
+    !if (r_cgs > 2.15*R0 .and. r_cgs < 2.20*R0) then
+    !   write (iu_ro, '(8x, "-> Tmid(selected) =", 1pe12.4)') Tmid_roots(1)
+    !end if
 
     ! Return consistent structure at selected root (including external irradiation)
     T_trial = Tmid_roots(1)
     call heating_cooling_cell( r_cgs, Sigma_cgs, OmegaK_cgs, shadow, T_trial, &
-                             H_loc, rho_loc, nu_dim, kappa_loc, tau_loc,     &
+                             H_loc, rho_loc, nu_dim, kappa_loc, kap_planck_loc, tau_loc,     &
                              Qvis_tmp, Qirr_tmp, Qrad_tmp,                  &
                              Qirr_in=Qirr_in )
 
     ierr = 0
   end subroutine solve_Tmid_cell
 
+  subroutine stats_max_rms_p95(x, n, xmax, xrms, xp95)
+   use kind_params, only: dp, i4b
+   implicit none
+   integer(i4b), intent(in) :: n
+   real(dp), intent(in) :: x(:)
+   real(dp), intent(out) :: xmax, xrms, xp95
+   real(dp), allocatable :: tmp(:)
+   integer(i4b) :: i, k95
+   real(dp) :: s2
+ 
+   if (n <= 0) then
+      xmax = 0.0_dp; xrms = 0.0_dp; xp95 = 0.0_dp
+      return
+   end if
+ 
+   xmax = x(1)
+   s2 = 0.0_dp
+   do i=1,n
+      xmax = max(xmax, x(i))
+      s2 = s2 + x(i)*x(i)
+   end do
+   xrms = sqrt(s2 / real(n,dp))
+ 
+   allocate(tmp(n))
+   tmp(:) = x(1:n)
+   call quicksort_dp(tmp, 1, n)
+ 
+   k95 = int( ceiling(0.95_dp*real(n,dp)) )
+   k95 = max(1, min(n, k95))
+   xp95 = tmp(k95)
+ 
+   deallocate(tmp)
+ end subroutine stats_max_rms_p95
+ 
+ subroutine stats_max_p95(x, n, xmax, xp95)
+   use kind_params, only: dp, i4b
+   implicit none
+   integer(i4b), intent(in) :: n
+   real(dp), intent(in) :: x(:)
+   real(dp), intent(out) :: xmax, xp95
+   real(dp), allocatable :: tmp(:)
+   integer(i4b) :: i, k95
+ 
+   if (n <= 0) then
+      xmax = 0.0_dp; xp95 = 0.0_dp
+      return
+   end if
+ 
+   xmax = x(1)
+   do i=1,n
+      xmax = max(xmax, x(i))
+   end do
+ 
+   allocate(tmp(n))
+   tmp(:) = x(1:n)
+   call quicksort_dp(tmp, 1, n)
+ 
+   k95 = int( ceiling(0.95_dp*real(n,dp)) )
+   k95 = max(1, min(n, k95))
+   xp95 = tmp(k95)
+   deallocate(tmp)
+ end subroutine stats_max_p95
+ 
+ recursive subroutine quicksort_dp(a, lo, hi)
+   use kind_params, only: dp, i4b
+   implicit none
+   real(dp), intent(inout) :: a(:)
+   integer(i4b), intent(in) :: lo, hi
+   integer(i4b) :: i, j
+   real(dp) :: pivot, tmp
+ 
+   if (lo >= hi) return
+   pivot = a((lo+hi)/2)
+   i = lo
+   j = hi
+   do
+      do while (a(i) < pivot); i = i + 1; end do
+      do while (a(j) > pivot); j = j - 1; end do
+      if (i <= j) then
+         tmp = a(i); a(i) = a(j); a(j) = tmp
+         i = i + 1
+         j = j - 1
+      end if
+      if (i > j) exit
+   end do
+   if (lo < j) call quicksort_dp(a, lo, j)
+   if (i < hi) call quicksort_dp(a, i, hi)
+ end subroutine quicksort_dp
+ 
 end module disk_energy_mod

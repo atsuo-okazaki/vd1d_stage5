@@ -16,5 +16,12 @@
     logical      :: do_hot_region_metrics = .false.  ! output T>=10^4 K extent to hot_region_metrics.dat
     integer(i4b) :: iprint_irr = 0  ! m_irr convergence diagnostics; >=1 to enable
 
+  !------------------------------------------------------------
+  ! SED parameters
+  !------------------------------------------------------------
+    integer(i4b) :: sed_nnu = 300_i4b
+    real(dp)     :: sed_nu_min_fac = 0.1_dp
+    real(dp)     :: sed_nu_max_fac = 10.0_dp
+  
   end module run_control_mod
   
